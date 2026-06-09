@@ -9,7 +9,7 @@ from datetime import datetime
 # =========================================================================
 # --- CONFIGURACIÓN DE NIVEL BI DIRECTOR ---
 # =========================================================================
-st.set_page_config(page_title="Price Shoes BI - Ultimate Master Center", layout="wide", page_icon="📈")
+st.set_page_config(page_title="Price Shoes BI - Command Center", layout="wide", page_icon="📈")
 
 st.markdown("""
     <style>
@@ -23,28 +23,20 @@ st.markdown("""
     .wow-metric-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; border-bottom: 1px solid #EEE; padding-bottom: 2px; }
     .wow-label { color: #666; font-size: 9px; font-weight: 700; text-transform: uppercase; }
     .wow-value { color: #1F497D; font-size: 14px; font-weight: 800; }
-    .wow-trend { font-size: 11px; font-weight: 800; }
-    .trend-up { color: #28A745; }
-    .trend-down { color: #DC3545; }
     
     /* KPI Master Cards */
     .kpi-master { background-color: white; border-radius: 12px; padding: 18px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border-top: 5px solid #1F497D; text-align: center; }
     .kpi-master-label { color: #666; font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 8px; }
     .kpi-master-value { color: #1F497D; font-size: 28px; font-weight: 900; }
-    
-    .exec-alert { padding: 10px; border-radius: 6px; margin-bottom: 10px; font-weight: bold; font-size: 12px; border-left: 5px solid; }
-    .alert-red { background-color: #FEE2E2; color: #991B1B; border-color: #EF4444; }
     </style>
     """, unsafe_allow_html=True)
 
 @st.cache_data(ttl=600)
 def load_all_intelligence_data():
     URL_XLSX = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSV6dtosg0Ydt0o3NMFezC--NjHfEW82onFeY2JR4PTYD3ylG4ZlRaQBquscFrCy_Lysrau9zTW6dkn/pub?output=xlsx"
-    # URL de la base maestra CSV de Drive para el ranking de colaboradores
     URL_CSV = "https://drive.google.com/uc?export=download&id=15UBabZ8g_VbDMZiPfR2iuW-U9YuNgHWP"
     
     try:
-        # 1. Cargar Operaciones Semanales (XLSX)
         resp_x = requests.get(URL_XLSX, timeout=30)
         xls = pd.ExcelFile(BytesIO(resp_x.content), engine='openpyxl')
         
@@ -67,7 +59,6 @@ def load_all_intelligence_data():
             if 'venta' in sheet.lower() or 'devolucion' in sheet.lower():
                 df_models = pd.read_excel(xls, sheet_name=sheet, engine='openpyxl')
                 df_models.columns = [str(c).strip() for c in df_models.columns]
-                # Mapeo de columnas de modelos
                 cmap = {'id':['id','ID'], 'modelo':['modelo','Modelo'], 'color':['color','Color'], 'merca':['merca','Merca','Marca'], 'devolucion':['devolucion','Devolucion'], 'venta':['venta','Venta'], 'tienda':['tienda','Tienda','Ubicación']}
                 for k, v in cmap.items():
                     for key in v:
@@ -78,16 +69,15 @@ def load_all_intelligence_data():
         for c in ['Total_Ing', 'Real_Rec', 'Pzas_Hab', 'Pzas_Ubi', 'Meta_Rec']:
             df_op[c] = pd.to_numeric(df_op[c], errors='coerce').fillna(0)
         
-        meses = {1:'Enero', 2:'Febrero', 3:'Marzo', 4:'Abril', 5:'Mayo', 6:'Junio', 7:'Julio', 8:'Agosto', 9:'Septiembre', 10:'Octubre', 11:'Noviembre', 12:'Diciembre'}
-        df_op['Mes'] = df_op['Fecha'].dt.month.map(meses)
+        meses_dict = {1:'Enero', 2:'Febrero', 3:'Marzo', 4:'Abril', 5:'Mayo', 6:'Junio', 7:'Julio', 8:'Agosto', 9:'Septiembre', 10:'Octubre', 11:'Noviembre', 12:'Diciembre'}
+        df_op['Mes'] = df_op['Fecha'].dt.month.map(meses_dict)
         
-        # 2. Cargar Base Maestra para Ranking de Colaboradores (CSV)
         resp_c = requests.get(URL_CSV, timeout=30)
-        df_master = pd.read_csv(BytesIO(resp_c.content), encoding='latin1', low_memory=False)
-        df_master.columns = [c.strip() for c in df_master.columns]
-        df_master = df_master.rename(columns={'Ubicación': 'Tienda', 'Número de Piezas': 'Pzas', 'Actividad Realizada': 'Actividad'})
+        df_m = pd.read_csv(BytesIO(resp_c.content), encoding='latin1', low_memory=False)
+        df_m.columns = [c.strip() for c in df_m.columns]
+        df_m = df_m.rename(columns={'Ubicación': 'Tienda', 'Número de Piezas': 'Pzas', 'Actividad Realizada': 'Actividad'})
         
-        return df_op, df_models, model_cols, df_master
+        return df_op, df_models, model_cols, df_m
     except Exception as e:
         st.error(f"Error BI: {e}")
         return pd.DataFrame(), pd.DataFrame(), {}, pd.DataFrame()
@@ -95,15 +85,20 @@ def load_all_intelligence_data():
 df_op, df_models, m_cols, df_m = load_all_intelligence_data()
 
 if not df_op.empty:
-    # Sidebar
     st.sidebar.image("https://priceshoes.com/media/logo/stores/1/logo_price_shoes.png", width=160)
+    
+    # --- FILTROS EN SIDEBAR ---
+    st.sidebar.markdown("### 🎛️ Filtros")
     sel_tiendas = st.sidebar.multiselect("Tiendas:", sorted(df_op['Tienda'].unique().tolist()), default=df_op['Tienda'].unique().tolist())
     sel_meses = st.sidebar.multiselect("Meses:", ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'], default=df_op['Mes'].unique().tolist())
     
+    actividades_list = sorted(df_m['Actividad'].unique().tolist()) if not df_m.empty else []
+    sel_actividades = st.sidebar.multiselect("Actividades:", actividades_list, default=actividades_list)
+    
     df_f = df_op[(df_op['Tienda'].isin(sel_tiendas)) & (df_op['Mes'].isin(sel_meses))]
 
-    st.markdown('<p class="main-title">PRICE SHOES • Ultimate Operational Intelligence</p>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-title">CENTRO DE MANDO EJECUTIVO, PRODUCTIVIDAD Y PRODUCTO</p>', unsafe_allow_html=True)
+    st.markdown('<p class="main-title">PRICE SHOES • Executive Command Center</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-title">BI & OPERATIONAL SCORECARD</p>', unsafe_allow_html=True)
 
     # --- 1. COMPARATIVOS WoW ÚLTIMAS 4 SEMANAS ---
     st.markdown("### 📊 Comparativo Semanal (Últimas 4 Semanas)")
@@ -114,12 +109,11 @@ if not df_op.empty:
         df_c = df_op[df_op['Semana'] == sem]
         if sel_tiendas: df_c = df_c[df_c['Tienda'].isin(sel_tiendas)]
         ing, hab, ubi = df_c['Total_Ing'].sum(), df_c['Pzas_Hab'].sum(), df_c['Pzas_Ubi'].sum()
-        
         with cols_w[i]:
             st.markdown(f'<div class="wow-card-header">{sem}</div>', unsafe_allow_html=True)
             st.markdown(f'<div class="wow-card-body"><div class="wow-metric-row"><span class="wow-label">Ingreso</span><span class="wow-value">{ing:,.0f}</span></div><div class="wow-metric-row"><span class="wow-label">Hab.</span><span class="wow-value">{hab:,.0f}</span></div><div class="wow-metric-row"><span class="wow-label">Ubi.</span><span class="wow-value">{ubi:,.0f}</span></div></div>', unsafe_allow_html=True)
 
-    # --- TABS ESTRATÉGICAS ---
+    # --- TABS ---
     t_exec, t_prod, t_model, t_audit = st.tabs(["📊 SCORECARD EJECUTIVO", "👥 RANKING COLABORADORES", "👟 TOP 30 MODELOS", "📑 AUDITORÍA"])
 
     with t_exec:
@@ -131,16 +125,16 @@ if not df_op.empty:
         with c3: st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">📍 Ubicado</p><p class="kpi-master-value">{(ubi_t/ing_t*100 if ing_t>0 else 0):.1f}%</p></div>', unsafe_allow_html=True)
         with c4: st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">🎯 Recorridos</p><p class="kpi-master-value">{(rec_r/rec_m*100 if rec_m>0 else 0):.1f}%</p></div>', unsafe_allow_html=True)
         
-        st.plotly_chart(px.funnel(x=[ing_total, hab_t, ubi_t], y=["Ingreso", "Habilitado", "Ubicado"], color_discrete_sequence=['#1F497D']), use_container_width=True, config={'staticPlot': True})
+        fig_f = px.funnel(x=[ing_t, hab_t, ubi_t], y=["Ingreso", "Habilitado", "Ubicado"], color_discrete_sequence=['#1F497D'])
+        st.plotly_chart(fig_f, use_container_width=True, config={'staticPlot': True})
 
     with t_prod:
         st.markdown("### 🏆 Ranking de Productividad por Colaborador")
         if not df_m.empty:
-            df_m_f = df_m[df_m['Tienda'].isin(sel_tiendas)]
+            df_m_f = df_m[(df_m['Tienda'].isin(sel_tiendas)) & (df_m['Actividad'].isin(sel_actividades))]
             df_user = df_m_f.groupby(['Nombre', 'Tienda']).agg({'Pzas': 'sum'}).reset_index().sort_values('Pzas', ascending=False)
             st.plotly_chart(px.bar(df_user.head(20), x='Nombre', y='Pzas', color='Tienda', title="Top 20 Colaboradores por Volumen"), use_container_width=True)
             st.dataframe(df_user, use_container_width=True)
-        else: st.info("Cargando datos de colaboradores...")
 
     with t_model:
         st.markdown("### 🏆 Top 30 Modelos por Tienda")
@@ -151,9 +145,8 @@ if not df_op.empty:
             d, v = m_cols['devolucion'], m_cols['venta']
             df_mf['Conv_%'] = (pd.to_numeric(df_mf[v], errors='coerce') / pd.to_numeric(df_mf[d], errors='coerce') * 100).fillna(0)
             st.dataframe(df_mf.sort_values('Conv_%', ascending=False).head(30), use_container_width=True)
-        else: st.info("Datos de modelos no disponibles.")
 
     with t_audit:
         st.dataframe(df_f, use_container_width=True)
 
-else: st.info("📊 Conectando con la base de datos... Verifica el Google Sheet.")
+else: st.info("📊 Conectando con la base de datos...")
