@@ -26,40 +26,47 @@ st.markdown("""
 # =========================================================================
 @st.cache_data(ttl=600)
 def load_all_data():
-    SHEET_ID = "1vSV6dtosg0Ydt0o3NMFezC--NjHfEW82onFeY2JR4PTYD3ylG4ZlRaQBquscFrCy_Lysrau9zTW6dkn"
-    # URL de exportación XLSX
-    URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=xlsx"
+    # URL de descarga directa para Google Sheets publicados como XLSX
+    # IMPORTANTE: El usuario debe haber publicado "Todo el documento" como "Microsoft Excel (.xlsx)"
+    URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSV6dtosg0Ydt0o3NMFezC--NjHfEW82onFeY2JR4PTYD3ylG4ZlRaQBquscFrCy_Lysrau9zTW6dkn/pub?output=xlsx"
     
     try:
-        response = requests.get(URL, timeout=15)
-        response.raise_for_status() # Verificar que la descarga fue exitosa
+        response = requests.get(URL, timeout=30)
+        response.raise_for_status()
         
-        # Usar openpyxl explícitamente como motor
+        # Cargar el archivo Excel completo
         xls = pd.ExcelFile(BytesIO(response.content), engine='openpyxl')
         
         data_rows = []
+        # Lista de tiendas a buscar en las hojas
         tiendas_objetivo = ['Vallejo', 'Arco Norte', 'Puebla Sur', 'Miravalle', 'Ecatepec']
         
         for sheet_name in xls.sheet_names:
-            if not sheet_name.lower().startswith('sem'): continue
-            
-            # Leer pestaña sin cabeceras
+            # Procesar solo pestañas que parezcan semanas (Sem 20, Sem 21, etc.)
+            if not sheet_name.lower().strip().startswith('sem'):
+                continue
+                
+            # Leer la hoja completa
             df_raw = pd.read_excel(xls, sheet_name=sheet_name, header=None, engine='openpyxl')
             current_date = "Sin Fecha"
             
             for i, row in df_raw.iterrows():
-                val = str(row[1]).strip() if len(row) > 1 else ""
+                if len(row) < 2: continue
+                val = str(row[1]).strip()
                 
-                # Detectar fecha
+                # Identificar fila de fecha
                 if '2026' in val and ',' in val:
                     current_date = val
                     continue
                 
-                # Detectar tienda
-                if any(t in val for t in tiendas_objetivo) and len(val) < 25:
+                # Identificar fila de tienda
+                if any(t.lower() in val.lower() for t in tiendas_objetivo) and len(val) < 30:
                     try:
+                        # Extraer mes del nombre de la fecha
+                        mes_ext = 'Mayo' if 'mayo' in current_date.lower() else ('Junio' if 'junio' in current_date.lower() else 'Julio-Dic')
+                        
                         data_rows.append({
-                            'Mes': 'Mayo' if 'mayo' in current_date.lower() else ('Junio' if 'junio' in current_date.lower() else 'Julio-Dic'),
+                            'Mes': mes_ext,
                             'Semana': sheet_name.strip(),
                             'Tienda': val,
                             'Sis_Aduana': row[2],
@@ -70,32 +77,35 @@ def load_all_data():
                             'Habilitadas': row[10],
                             'Ubicadas': row[11]
                         })
-                    except: continue
+                    except Exception:
+                        continue
 
         if not data_rows:
             return pd.DataFrame()
             
         df = pd.DataFrame(data_rows)
         
-        # Limpieza numérica
-        def clean(x):
+        # Limpiar y convertir a números
+        def clean_num(x):
             try:
+                if pd.isna(x): return 0.0
                 s = str(x).replace(',', '').replace('%', '').strip()
                 return float(s)
-            except: return 0.0
+            except:
+                return 0.0
 
-        num_cols = ['Sis_Aduana', 'Muertos', 'Cajas', 'Meta_Rec', 'Real_Rec', 'Habilitadas', 'Ubicadas']
-        for col in num_cols:
-            df[col] = df[col].apply(clean)
+        for col in ['Sis_Aduana', 'Muertos', 'Cajas', 'Meta_Rec', 'Real_Rec', 'Habilitadas', 'Ubicadas']:
+            df[col] = df[col].apply(clean_num)
         
         df['Total_Ingresos'] = df['Sis_Aduana'] + df['Muertos'] + df['Cajas']
         return df
+        
     except Exception as e:
-        st.error(f"Error de conexión o formato: {e}")
+        st.error(f"Error al cargar datos del Excel: {e}")
         return pd.DataFrame()
 
 # =========================================================================
-# --- INTERFAZ ---
+# --- LÓGICA DE INTERFAZ ---
 # =========================================================================
 df = load_all_data()
 
@@ -103,27 +113,27 @@ st.markdown('<p class="main-title">👚 PRICE SHOES • Operaciones Ropa</p>', u
 st.markdown('<p class="sub-title">DASHBOARD ANUAL CONSOLIDADO</p>', unsafe_allow_html=True)
 
 if not df.empty:
-    st.sidebar.markdown("### 🔍 Filtros")
+    st.sidebar.markdown("### 🔍 Filtros de Reporte")
     
     # Filtro Mes
-    meses_disponibles = sorted(df['Mes'].unique().tolist())
-    sel_mes = st.sidebar.selectbox("Mes:", ["Todos"] + meses_disponibles)
+    meses = ["Todos"] + sorted(df['Mes'].unique().tolist())
+    sel_mes = st.sidebar.selectbox("Selecciona Mes:", meses)
     df_mes = df if sel_mes == "Todos" else df[df['Mes'] == sel_mes]
     
     # Filtro Semana
-    semanas_disponibles = sorted(df_mes['Semana'].unique().tolist(), key=lambda x: int(''.join(filter(str.isdigit, x)) or 0))
-    sel_sem = st.sidebar.selectbox("Semana:", ["Todas"] + semanas_disponibles)
+    semanas = ["Todas"] + sorted(df_mes['Semana'].unique().tolist(), key=lambda x: int(''.join(filter(str.isdigit, x)) or 0))
+    sel_sem = st.sidebar.selectbox("Selecciona Semana:", semanas)
     
     # Filtro Tienda
-    tiendas_disponibles = sorted(df['Tienda'].unique().tolist())
-    sel_tienda = st.sidebar.selectbox("Tienda:", ["Todas"] + tiendas_disponibles)
+    tiendas = ["Todas"] + sorted(df['Tienda'].unique().tolist())
+    sel_tienda = st.sidebar.selectbox("Selecciona Tienda:", tiendas)
 
-    # Aplicar Filtros
+    # Aplicar filtros
     df_f = df_mes.copy()
     if sel_sem != "Todas": df_f = df_f[df_f['Semana'] == sel_sem]
     if sel_tienda != "Todas": df_f = df_f[df_f['Tienda'] == sel_tienda]
 
-    # Visualización
+    # Visualización de KPIs
     st.markdown(f"### 📊 Reporte: {sel_mes} / {sel_sem} / {sel_tienda}")
     
     c1, c2, c3, c4 = st.columns(4)
@@ -135,24 +145,37 @@ if not df.empty:
     c3.markdown(f'<div class="kpi-card"><p class="kpi-label">📍 UBICADO</p><p class="kpi-value">{ubi:,.0f} <small class="kpi-pct">({(ubi/ing*100 if ing>0 else 0):.1f}%)</small></p></div>', unsafe_allow_html=True)
     c4.markdown(f'<div class="kpi-card"><p class="kpi-label">🎯 RECORRIDOS</p><p class="kpi-value">{(rea/met*100 if met>0 else 0):.1f}%</p></div>', unsafe_allow_html=True)
 
-    # Gráfico Evolución
+    # Gráfico de Evolución
     if sel_sem == "Todas":
-        st.markdown('<p class="graph-title">Evolución Semanal</p>', unsafe_allow_html=True)
+        st.markdown('<p class="graph-title">Tendencia Semanal de Operación</p>', unsafe_allow_html=True)
         df_t = df_f.groupby('Semana').agg({'Total_Ingresos':'sum', 'Habilitadas':'sum'}).reset_index()
-        df_t['n'] = df_t['Semana'].apply(lambda x: int(''.join(filter(str.isdigit, x)) or 0))
-        df_t = df_t.sort_values('n')
+        df_t['orden'] = df_t['Semana'].apply(lambda x: int(''.join(filter(str.isdigit, x)) or 0))
+        df_t = df_t.sort_values('orden')
+        
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df_t['Semana'], y=df_t['Total_Ingresos'], name="Ingresos", line=dict(color='#1F497D', width=3)))
         fig.add_trace(go.Scatter(x=df_t['Semana'], y=df_t['Habilitadas'], name="Habilitado", line=dict(color='#E6007E', width=3)))
+        fig.update_layout(plot_bgcolor='white', height=400, margin=dict(t=10, b=10))
         st.plotly_chart(fig, use_container_width=True)
 
-    # Ranking
-    st.markdown('<p class="graph-title">Desempeño por Tienda</p>', unsafe_allow_html=True)
+    # Ranking por Tienda
+    st.markdown('<p class="graph-title">Comparativo por Sucursal</p>', unsafe_allow_html=True)
     df_g = df_f.groupby('Tienda').agg({'Total_Ingresos':'sum', 'Habilitadas':'sum'}).reset_index().sort_values('Total_Ingresos', ascending=False)
     fig2 = go.Figure()
     fig2.add_trace(go.Bar(x=df_g['Tienda'], y=df_g['Total_Ingresos'], name="Ingresos", marker_color='#1F497D'))
     fig2.add_trace(go.Bar(x=df_g['Tienda'], y=df_g['Habilitadas'], name="Habilitado", marker_color='#E6007E'))
+    fig2.update_layout(barmode='group', plot_bgcolor='white', height=400)
     st.plotly_chart(fig2, use_container_width=True)
 
+    # Matriz Detallada
+    with st.expander("Ver Matriz de Datos Detallada"):
+        st.dataframe(df_f.groupby(['Mes', 'Semana', 'Tienda']).agg({
+            'Total_Ingresos': 'sum',
+            'Habilitadas': 'sum',
+            'Ubicadas': 'sum',
+            'Real_Rec': 'sum',
+            'Meta_Rec': 'sum'
+        }).reset_index(), use_container_width=True)
+
 else:
-    st.info("Esperando datos... Asegúrate de que el Google Sheet sea público y tenga pestañas con nombre 'Sem XX'.")
+    st.info("No se detectaron datos. Por favor, asegúrate de publicar el Google Sheet como Excel (.xlsx) y seleccionar 'Todo el documento'.")
