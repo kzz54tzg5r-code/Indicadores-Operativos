@@ -9,7 +9,7 @@ from datetime import datetime
 # =========================================================================
 # --- CONFIGURACIÓN DE NIVEL BI DIRECTOR ---
 # =========================================================================
-st.set_page_config(page_title="Price Shoes BI - Command Center", layout="wide", page_icon="📈")
+st.set_page_config(page_title="Price Shoes BI - Executive Command Center", layout="wide", page_icon="📈")
 
 st.markdown("""
     <style>
@@ -87,12 +87,14 @@ df_op, df_models, m_cols, df_m = load_all_intelligence_data()
 if not df_op.empty:
     st.sidebar.image("https://priceshoes.com/media/logo/stores/1/logo_price_shoes.png", width=160)
     
-    # --- FILTROS EN SIDEBAR ---
     st.sidebar.markdown("### 🎛️ Filtros")
     sel_tiendas = st.sidebar.multiselect("Tiendas:", sorted(df_op['Tienda'].unique().tolist()), default=df_op['Tienda'].unique().tolist())
     sel_meses = st.sidebar.multiselect("Meses:", ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'], default=df_op['Mes'].unique().tolist())
     
-    actividades_list = sorted(df_m['Actividad'].unique().tolist()) if not df_m.empty else []
+    # Manejo robusto de la lista de actividades para evitar TypeError
+    actividades_list = []
+    if not df_m.empty:
+        actividades_list = sorted([str(x) for x in df_m['Actividad'].dropna().unique()])
     sel_actividades = st.sidebar.multiselect("Actividades:", actividades_list, default=actividades_list)
     
     df_f = df_op[(df_op['Tienda'].isin(sel_tiendas)) & (df_op['Mes'].isin(sel_meses))]
@@ -113,7 +115,6 @@ if not df_op.empty:
             st.markdown(f'<div class="wow-card-header">{sem}</div>', unsafe_allow_html=True)
             st.markdown(f'<div class="wow-card-body"><div class="wow-metric-row"><span class="wow-label">Ingreso</span><span class="wow-value">{ing:,.0f}</span></div><div class="wow-metric-row"><span class="wow-label">Hab.</span><span class="wow-value">{hab:,.0f}</span></div><div class="wow-metric-row"><span class="wow-label">Ubi.</span><span class="wow-value">{ubi:,.0f}</span></div></div>', unsafe_allow_html=True)
 
-    # --- TABS ---
     t_exec, t_prod, t_model, t_audit = st.tabs(["📊 SCORECARD EJECUTIVO", "👥 RANKING COLABORADORES", "👟 TOP 30 MODELOS", "📑 AUDITORÍA"])
 
     with t_exec:
@@ -131,7 +132,7 @@ if not df_op.empty:
     with t_prod:
         st.markdown("### 🏆 Ranking de Productividad por Colaborador")
         if not df_m.empty:
-            df_m_f = df_m[(df_m['Tienda'].isin(sel_tiendas)) & (df_m['Actividad'].isin(sel_actividades))]
+            df_m_f = df_m[(df_m['Tienda'].isin(sel_tiendas)) & (df_m['Actividad'].astype(str).isin(sel_actividades))]
             df_user = df_m_f.groupby(['Nombre', 'Tienda']).agg({'Pzas': 'sum'}).reset_index().sort_values('Pzas', ascending=False)
             st.plotly_chart(px.bar(df_user.head(20), x='Nombre', y='Pzas', color='Tienda', title="Top 20 Colaboradores por Volumen"), use_container_width=True)
             st.dataframe(df_user, use_container_width=True)
