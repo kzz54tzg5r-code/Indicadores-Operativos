@@ -4,11 +4,12 @@ import plotly.graph_objects as go
 import plotly.express as px
 import requests
 from io import BytesIO
+from datetime import datetime
 
 # =========================================================================
 # --- CONFIGURACIÓN EJECUTIVA ---
 # =========================================================================
-st.set_page_config(page_title="Price Shoes - Intelligence WoW", layout="wide", page_icon="🏢")
+st.set_page_config(page_title="Price Shoes - Operational Scorecard", layout="wide", page_icon="🏢")
 
 st.markdown("""
     <style>
@@ -25,15 +26,6 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-def find_headers(df):
-    """Busca la fila donde empiezan los datos reales"""
-    # Buscamos palabras clave en las primeras 15 filas
-    for i in range(min(15, len(df))):
-        row_str = " ".join(str(val).lower() for val in df.iloc[i].values)
-        if 'tienda' in row_str or 'fecha' in row_str or 'piezas' in row_str:
-            return i
-    return 0
-
 @st.cache_data(ttl=600)
 def load_data():
     URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSV6dtosg0Ydt0o3NMFezC--NjHfEW82onFeY2JR4PTYD3ylG4ZlRaQBquscFrCy_Lysrau9zTW6dkn/pub?output=xlsx"
@@ -41,98 +33,92 @@ def load_data():
         response = requests.get(URL, timeout=30)
         xls = pd.ExcelFile(BytesIO(response.content), engine='openpyxl')
         
-        all_dfs = []
-        # El archivo tiene pestañas como 'Sem 20', 'Sem 21', etc.
+        all_data = []
         for sheet in xls.sheet_names:
             if 'sem' in sheet.lower():
-                # Leer crudo para encontrar encabezados
-                raw_df = pd.read_excel(xls, sheet_name=sheet, header=None, engine='openpyxl')
-                h_idx = find_headers(raw_df)
+                # Leemos la pestaña completa
+                df_raw = pd.read_excel(xls, sheet_name=sheet, header=None, engine='openpyxl')
                 
-                # Re-leer con encabezados correctos
-                df_clean = pd.read_excel(xls, sheet_name=sheet, skiprows=h_idx, engine='openpyxl')
-                df_clean.columns = [str(c).strip() for c in df_clean.columns]
-                df_clean['Semana_Ref'] = sheet.strip()
-                all_dfs.append(df_clean)
+                # Buscamos los bloques de datos. En este archivo, parece haber un bloque por día.
+                # Identificamos las filas donde 'Tienda' está en la columna B (index 1)
+                header_rows = df_raw[df_raw[1] == 'Tienda'].index.tolist()
+                
+                for h_idx in header_rows:
+                    # La fecha suele estar una fila arriba del encabezado 'Tienda' en la columna B
+                    fecha_val = df_raw.iloc[h_idx-1, 1]
+                    if not isinstance(fecha_val, datetime):
+                        continue
+                        
+                    # Extraemos las 6 filas de datos (las tiendas: Vallejo, Arco Norte, Puebla Sur, Miravalle, Ecatepec, etc.)
+                    # El bloque de datos tiene 15 columnas (B a P)
+                    df_day = df_raw.iloc[h_idx+1 : h_idx+7, 1:16].copy()
+                    df_day.columns = ['Tienda', 'Ing_Aduana_Sis', 'Ing_Aduana', 'Ing_Muertos', 'Ing_Cajas', 'Total_Ing', 
+                                     'Meta_Rec', 'Real_Rec', 'Pzas_Rec', 'Pzas_Hab', 'Pzas_Ubi', 
+                                     'Pct_Rec', 'Pct_Hab', 'Pct_Ubi', 'Extra']
+                    
+                    df_day['Fecha'] = fecha_val
+                    df_day['Semana'] = sheet
+                    all_data.append(df_day)
         
-        if not all_dfs: return pd.DataFrame()
+        if not all_data: return pd.DataFrame()
         
-        df = pd.concat(all_dfs, ignore_index=True)
+        df = pd.concat(all_data, ignore_index=True)
+        df = df.dropna(subset=['Tienda'])
         
-        # Estandarizar columnas
-        col_map = {
-            'Ubicación': 'Tienda', 'Número de Piezas': 'Pzas', 
-            'Actividad Realizada': 'Actividad', 'Motivo de ingreso': 'Motivo'
-        }
-        df = df.rename(columns=col_map)
-        
-        # Limpieza de fechas
-        df['Fecha_dt'] = pd.to_datetime(df['Fecha'], errors='coerce')
-        df = df.dropna(subset=['Fecha_dt'])
-        
-        # --- LÓGICA DE INGRESOS ---
-        motivos_ing = ['Cajas', 'Muertos', 'Probador']
-        df['Ingreso_Rec'] = df.apply(
-            lambda r: r['Pzas'] if (str(r['Actividad']).strip() == 'Recolección de muertos' and 
-                                   str(r['Motivo']).strip() in motivos_ing) else 0, axis=1
-        )
-        
-        # --- LÓGICA DE RECORRIDOS ---
-        df['Dia_Sem'] = df['Fecha_dt'].dt.dayofweek
-        df['Meta_Rec'] = df['Dia_Sem'].apply(lambda x: 5 if x <= 2 else 8)
-        # Contar recorridos reales (RECORRIDOs == 1)
-        df['Real_Rec'] = df.get('RECORRIDOs', 0).apply(lambda x: 1 if str(x) == '1' else 0)
-
-        # Meses
-        m_dict = {1:'Enero', 2:'Febrero', 3:'Marzo', 4:'Abril', 5:'Mayo', 6:'Junio', 7:'Julio', 8:'Agosto', 9:'Septiembre', 10:'Octubre', 11:'Noviembre', 12:'Diciembre'}
-        df['Mes'] = df['Fecha_dt'].dt.month.map(m_dict)
-        
-        # Habilitado y Ubicado
-        df['Es_Hab'] = df.apply(lambda r: r['Pzas'] if str(r['Actividad']).strip() == 'Acondicionado' else 0, axis=1)
-        df['Es_Ubi'] = df.apply(lambda r: r['Pzas'] if str(r['Actividad']).strip() == 'Ubicado' else 0, axis=1)
+        # Limpieza de tipos
+        cols_num = ['Total_Ing', 'Meta_Rec', 'Real_Rec', 'Pzas_Rec', 'Pzas_Hab', 'Pzas_Ubi']
+        for col in cols_num:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            
+        # Atributos de tiempo
+        meses_dict = {1:'Enero', 2:'Febrero', 3:'Marzo', 4:'Abril', 5:'Mayo', 6:'Junio', 7:'Julio', 8:'Agosto', 9:'Septiembre', 10:'Octubre', 11:'Noviembre', 12:'Diciembre'}
+        df['Mes'] = df['Fecha'].dt.month.map(meses_dict)
         
         return df
     except Exception as e:
-        st.error(f"Error de conexión: {e}")
+        st.error(f"Error de procesamiento: {e}")
         return pd.DataFrame()
 
 df_raw = load_data()
 
 if not df_raw.empty:
+    # --- FILTROS ---
     st.sidebar.image("https://priceshoes.com/media/logo/stores/1/logo_price_shoes.png", width=160)
     sel_tiendas = st.sidebar.multiselect("Tiendas:", sorted(df_raw['Tienda'].unique().tolist()), default=df_raw['Tienda'].unique().tolist())
     sel_meses = st.sidebar.multiselect("Meses:", ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'], default=df_raw['Mes'].unique().tolist())
     
     df_f = df_raw[(df_raw['Tienda'].isin(sel_tiendas)) & (df_raw['Mes'].isin(sel_meses))]
     
-    st.markdown('<p class="main-title">PRICE SHOES • Operational Intelligence</p>', unsafe_allow_html=True)
+    st.markdown('<p class="main-title">PRICE SHOES • Operational Scorecard</p>', unsafe_allow_html=True)
     st.markdown('<p class="sub-title">CONTROL DE RECUPERACIÓN Y RECORRIDOS</p>', unsafe_allow_html=True)
 
-    tab1, tab2, tab3 = st.tabs(["📊 DASHBOARD EJECUTIVO", "👥 PRODUCTIVIDAD", "📑 AUDITORÍA"])
+    # --- KPI CARDS ---
+    ing = df_f['Total_Ing'].sum()
+    hab = df_f['Pzas_Hab'].sum()
+    ubi = df_f['Pzas_Ubi'].sum()
+    rec_m = df_f['Meta_Rec'].sum()
+    rec_r = df_f['Real_Rec'].sum()
+    
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(f'<div class="kpi-container"><p class="kpi-label">📥 Ingresos Totales</p><p class="kpi-value">{ing:,.0f}</p></div>', unsafe_allow_html=True)
+    c2.markdown(f'<div class="kpi-container"><p class="kpi-label">✨ Habilitado</p><p class="kpi-value">{(hab/ing*100 if ing>0 else 0):.1f}%</p><p class="kpi-sub">{hab:,.0f} Pzas</p></div>', unsafe_allow_html=True)
+    c3.markdown(f'<div class="kpi-container"><p class="kpi-label">📍 Ubicado</p><p class="kpi-value">{(ubi/ing*100 if ing>0 else 0):.1f}%</p><p class="kpi-sub">{ubi:,.0f} Pzas</p></div>', unsafe_allow_html=True)
+    c4.markdown(f'<div class="kpi-container"><p class="kpi-label">🎯 Efic. Recorridos</p><p class="kpi-value">{(rec_r/rec_m*100 if rec_m>0 else 0):.1f}%</p><p class="kpi-sub">{rec_r:,.0f} de {rec_m:,.0f}</p></div>', unsafe_allow_html=True)
 
+    # --- GRÁFICOS ---
+    tab1, tab2 = st.tabs(["📈 TENDENCIAS", "📑 DETALLE"])
     with tab1:
-        # Recorridos
-        df_rec = df_f.groupby(['Fecha_dt', 'Tienda', 'Meta_Rec']).agg({'Real_Rec': 'sum'}).reset_index()
-        t_meta, t_real = df_rec['Meta_Rec'].sum(), df_rec['Real_Rec'].sum()
-        pct_rec = (t_real / t_meta * 100) if t_meta > 0 else 0
-
-        ing_total = df_f['Ingreso_Rec'].sum()
-        hab, ubi = df_f['Es_Hab'].sum(), df_f['Es_Ubi'].sum()
-        
-        c1, c2, c3, c4 = st.columns(4)
-        c1.markdown(f'<div class="kpi-container"><p class="kpi-label">📥 Ingresos Recolección</p><p class="kpi-value">{ing_total:,.0f}</p></div>', unsafe_allow_html=True)
-        c2.markdown(f'<div class="kpi-container"><p class="kpi-label">✨ Habilitado</p><p class="kpi-value">{(hab/ing_total*100 if ing_total>0 else 0):.1f}%</p></div>', unsafe_allow_html=True)
-        c3.markdown(f'<div class="kpi-container"><p class="kpi-label">📍 Ubicado</p><p class="kpi-value">{(ubi/ing_total*100 if ing_total>0 else 0):.1f}%</p></div>', unsafe_allow_html=True)
-        c4.markdown(f'<div class="kpi-container"><p class="kpi-label">🎯 Efic. Recorridos</p><p class="kpi-value">{pct_rec:.1f}%</p><p class="kpi-sub">{t_real:,.0f} de {t_meta:,.0f}</p></div>', unsafe_allow_html=True)
-
-        fig = px.funnel(x=[ing_total, hab, ubi], y=["Ingreso", "Habilitado", "Ubicado"], color_discrete_sequence=['#1F497D'])
-        st.plotly_chart(fig, use_container_width=True, config={'staticPlot': True})
+        col_a, col_b = st.columns(2)
+        with col_a:
+            df_sem = df_f.groupby('Semana').agg({'Total_Ing':'sum', 'Pzas_Hab':'sum'}).reset_index()
+            fig = px.line(df_sem, x='Semana', y=['Total_Ing', 'Pzas_Hab'], title="Evolución Ingreso vs Habilitado", color_discrete_sequence=['#1F497D', '#E6007E'])
+            st.plotly_chart(fig, use_container_width=True, config={'staticPlot': True})
+        with col_b:
+            df_t = df_f.groupby('Tienda').agg({'Total_Ing':'sum', 'Pzas_Ubi':'sum'}).reset_index()
+            fig2 = px.bar(df_t, x='Tienda', y=['Total_Ing', 'Pzas_Ubi'], barmode='group', title="Desempeño por Tienda", color_discrete_sequence=['#1F497D', '#E6007E'])
+            st.plotly_chart(fig2, use_container_width=True, config={'staticPlot': True})
 
     with tab2:
-        df_u = df_f.groupby(['Nombre', 'Tienda']).agg({'Pzas':'sum'}).reset_index().sort_values('Pzas', ascending=False)
-        st.plotly_chart(px.bar(df_u.head(15), x='Nombre', y='Pzas', color='Tienda', title="Ranking de Actividad por Usuario"), use_container_width=True, config={'staticPlot': True})
-
-    with tab3:
-        st.dataframe(df_f[['Fecha', 'Tienda', 'Actividad', 'Nombre', 'Pzas', 'Motivo']], use_container_width=True)
+        st.dataframe(df_f[['Fecha', 'Semana', 'Tienda', 'Total_Ing', 'Pzas_Hab', 'Pzas_Ubi', 'Real_Rec', 'Meta_Rec']], use_container_width=True)
 else:
-    st.info("📊 El sistema no detectó datos en las pestañas 'Sem XX'. Verifica que el Google Sheet sea público y tenga ese formato.")
+    st.info("📊 Conectando con la base de datos... Asegúrate de que el Google Sheet sea público.")
