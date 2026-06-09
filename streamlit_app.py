@@ -8,7 +8,7 @@ from io import BytesIO
 # =========================================================================
 # --- CONFIGURACIÓN EJECUTIVA ---
 # =========================================================================
-st.set_page_config(page_title="Price Shoes - Operational Intelligence", layout="wide", page_icon="🏢")
+st.set_page_config(page_title="Price Shoes - Intelligence WoW", layout="wide", page_icon="🏢")
 
 st.markdown("""
     <style>
@@ -22,16 +22,15 @@ st.markdown("""
     .alert-card { padding: 12px; border-radius: 8px; margin-bottom: 12px; font-weight: bold; font-size: 13px; border-left: 6px solid; }
     .alert-red { background-color: #FEE2E2; color: #991B1B; border-color: #EF4444; }
     .alert-yellow { background-color: #FEF3C7; color: #92400E; border-color: #F59E0B; }
-    .stPlotlyChart { pointer-events: none; border-radius: 12px; background: white; padding: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
 def find_headers(df):
-    """Busca la fila que contiene las palabras clave de los encabezados"""
-    keywords = ['Fecha', 'Tienda', 'Ubicación', 'Actividad Realizada', 'Piezas']
-    for i, row in df.iterrows():
-        row_str = " ".join(str(val) for val in row.values)
-        if any(key in row_str for key in keywords):
+    """Busca la fila donde empiezan los datos reales"""
+    # Buscamos palabras clave en las primeras 15 filas
+    for i in range(min(15, len(df))):
+        row_str = " ".join(str(val).lower() for val in df.iloc[i].values)
+        if 'tienda' in row_str or 'fecha' in row_str or 'piezas' in row_str:
             return i
     return 0
 
@@ -39,74 +38,65 @@ def find_headers(df):
 def load_data():
     URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSV6dtosg0Ydt0o3NMFezC--NjHfEW82onFeY2JR4PTYD3ylG4ZlRaQBquscFrCy_Lysrau9zTW6dkn/pub?output=xlsx"
     try:
-        response = requests.get(URL, timeout=60)
+        response = requests.get(URL, timeout=30)
         xls = pd.ExcelFile(BytesIO(response.content), engine='openpyxl')
         
-        df_muertos_list = []
-        df_venta = pd.DataFrame()
-        
+        all_dfs = []
+        # El archivo tiene pestañas como 'Sem 20', 'Sem 21', etc.
         for sheet in xls.sheet_names:
-            if 'muertos' in sheet.lower():
-                # Leer crudo y buscar encabezados
-                temp_df = pd.read_excel(xls, sheet_name=sheet, engine='openpyxl', header=None)
-                header_idx = find_headers(temp_df)
+            if 'sem' in sheet.lower():
+                # Leer crudo para encontrar encabezados
+                raw_df = pd.read_excel(xls, sheet_name=sheet, header=None, engine='openpyxl')
+                h_idx = find_headers(raw_df)
                 
-                # Re-leer con el encabezado correcto
-                df_clean = pd.read_excel(xls, sheet_name=sheet, engine='openpyxl', skiprows=header_idx)
+                # Re-leer con encabezados correctos
+                df_clean = pd.read_excel(xls, sheet_name=sheet, skiprows=h_idx, engine='openpyxl')
                 df_clean.columns = [str(c).strip() for c in df_clean.columns]
-                df_muertos_list.append(df_clean)
-                
-            if 'venta' in sheet.lower() or 'devolucion' in sheet.lower():
-                df_venta = pd.read_excel(xls, sheet_name=sheet, engine='openpyxl')
-
-        if not df_muertos_list: return pd.DataFrame(), 0
+                df_clean['Semana_Ref'] = sheet.strip()
+                all_dfs.append(df_clean)
         
-        df_muertos = pd.concat(df_muertos_list, ignore_index=True)
+        if not all_dfs: return pd.DataFrame()
         
-        # Estandarizar nombres de columnas
+        df = pd.concat(all_dfs, ignore_index=True)
+        
+        # Estandarizar columnas
         col_map = {
             'Ubicación': 'Tienda', 'Número de Piezas': 'Pzas', 
             'Actividad Realizada': 'Actividad', 'Motivo de ingreso': 'Motivo'
         }
-        df_muertos = df_muertos.rename(columns=col_map)
+        df = df.rename(columns=col_map)
         
-        # Filtrar filas vacías de fecha
-        df_muertos['Fecha_dt'] = pd.to_datetime(df_muertos['Fecha'], errors='coerce')
-        df_muertos = df_muertos.dropna(subset=['Fecha_dt'])
+        # Limpieza de fechas
+        df['Fecha_dt'] = pd.to_datetime(df['Fecha'], errors='coerce')
+        df = df.dropna(subset=['Fecha_dt'])
         
         # --- LÓGICA DE INGRESOS ---
         motivos_ing = ['Cajas', 'Muertos', 'Probador']
-        df_muertos['Ingreso_Rec'] = df_muertos.apply(
+        df['Ingreso_Rec'] = df.apply(
             lambda r: r['Pzas'] if (str(r['Actividad']).strip() == 'Recolección de muertos' and 
                                    str(r['Motivo']).strip() in motivos_ing) else 0, axis=1
         )
         
         # --- LÓGICA DE RECORRIDOS ---
-        df_muertos['Dia_Sem'] = df_muertos['Fecha_dt'].dt.dayofweek
-        df_muertos['Meta_Rec'] = df_muertos['Dia_Sem'].apply(lambda x: 5 if x <= 2 else 8)
-        df_muertos['Real_Rec'] = df_muertos.get('RECORRIDOs', 0).apply(lambda x: 1 if str(x) == '1' else 0)
+        df['Dia_Sem'] = df['Fecha_dt'].dt.dayofweek
+        df['Meta_Rec'] = df['Dia_Sem'].apply(lambda x: 5 if x <= 2 else 8)
+        # Contar recorridos reales (RECORRIDOs == 1)
+        df['Real_Rec'] = df.get('RECORRIDOs', 0).apply(lambda x: 1 if str(x) == '1' else 0)
 
-        # Devoluciones
-        ingreso_devs = 0
-        if not df_venta.empty:
-            df_venta.columns = [str(c).strip() for c in df_venta.columns]
-            col_dev = [c for c in df_venta.columns if 'devolucion' in c.lower()]
-            if col_dev: ingreso_devs = df_venta[col_dev[0]].sum()
-
-        # Tiempo y Mes
-        df_muertos['Semana'] = "Sem " + df_muertos['Fecha_dt'].dt.isocalendar().week.astype(str)
+        # Meses
         m_dict = {1:'Enero', 2:'Febrero', 3:'Marzo', 4:'Abril', 5:'Mayo', 6:'Junio', 7:'Julio', 8:'Agosto', 9:'Septiembre', 10:'Octubre', 11:'Noviembre', 12:'Diciembre'}
-        df_muertos['Mes'] = df_muertos['Fecha_dt'].dt.month.map(m_dict)
+        df['Mes'] = df['Fecha_dt'].dt.month.map(m_dict)
         
-        df_muertos['Es_Hab'] = df_muertos.apply(lambda r: r['Pzas'] if str(r['Actividad']).strip() == 'Acondicionado' else 0, axis=1)
-        df_muertos['Es_Ubi'] = df_muertos.apply(lambda r: r['Pzas'] if str(r['Actividad']).strip() == 'Ubicado' else 0, axis=1)
+        # Habilitado y Ubicado
+        df['Es_Hab'] = df.apply(lambda r: r['Pzas'] if str(r['Actividad']).strip() == 'Acondicionado' else 0, axis=1)
+        df['Es_Ubi'] = df.apply(lambda r: r['Pzas'] if str(r['Actividad']).strip() == 'Ubicado' else 0, axis=1)
         
-        return df_muertos, ingreso_devs
+        return df
     except Exception as e:
-        st.error(f"Error crítico de procesamiento: {e}")
-        return pd.DataFrame(), 0
+        st.error(f"Error de conexión: {e}")
+        return pd.DataFrame()
 
-df_raw, dev_total = load_data()
+df_raw = load_data()
 
 if not df_raw.empty:
     st.sidebar.image("https://priceshoes.com/media/logo/stores/1/logo_price_shoes.png", width=160)
@@ -126,11 +116,11 @@ if not df_raw.empty:
         t_meta, t_real = df_rec['Meta_Rec'].sum(), df_rec['Real_Rec'].sum()
         pct_rec = (t_real / t_meta * 100) if t_meta > 0 else 0
 
-        ing_total = df_f['Ingreso_Rec'].sum() + dev_total
+        ing_total = df_f['Ingreso_Rec'].sum()
         hab, ubi = df_f['Es_Hab'].sum(), df_f['Es_Ubi'].sum()
         
         c1, c2, c3, c4 = st.columns(4)
-        c1.markdown(f'<div class="kpi-container"><p class="kpi-label">📥 Ingresos Totales</p><p class="kpi-value">{ing_total:,.0f}</p></div>', unsafe_allow_html=True)
+        c1.markdown(f'<div class="kpi-container"><p class="kpi-label">📥 Ingresos Recolección</p><p class="kpi-value">{ing_total:,.0f}</p></div>', unsafe_allow_html=True)
         c2.markdown(f'<div class="kpi-container"><p class="kpi-label">✨ Habilitado</p><p class="kpi-value">{(hab/ing_total*100 if ing_total>0 else 0):.1f}%</p></div>', unsafe_allow_html=True)
         c3.markdown(f'<div class="kpi-container"><p class="kpi-label">📍 Ubicado</p><p class="kpi-value">{(ubi/ing_total*100 if ing_total>0 else 0):.1f}%</p></div>', unsafe_allow_html=True)
         c4.markdown(f'<div class="kpi-container"><p class="kpi-label">🎯 Efic. Recorridos</p><p class="kpi-value">{pct_rec:.1f}%</p><p class="kpi-sub">{t_real:,.0f} de {t_meta:,.0f}</p></div>', unsafe_allow_html=True)
@@ -140,10 +130,9 @@ if not df_raw.empty:
 
     with tab2:
         df_u = df_f.groupby(['Nombre', 'Tienda']).agg({'Pzas':'sum'}).reset_index().sort_values('Pzas', ascending=False)
-        st.plotly_chart(px.bar(df_u.head(15), x='Nombre', y='Pzas', color='Tienda', title="Top Actividad por Usuario"), use_container_width=True, config={'staticPlot': True})
-        st.dataframe(df_u.head(20), use_container_width=True)
+        st.plotly_chart(px.bar(df_u.head(15), x='Nombre', y='Pzas', color='Tienda', title="Ranking de Actividad por Usuario"), use_container_width=True, config={'staticPlot': True})
 
     with tab3:
         st.dataframe(df_f[['Fecha', 'Tienda', 'Actividad', 'Nombre', 'Pzas', 'Motivo']], use_container_width=True)
 else:
-    st.info("Esperando datos... Verifica que el Google Sheet sea público.")
+    st.info("📊 El sistema no detectó datos en las pestañas 'Sem XX'. Verifica que el Google Sheet sea público y tenga ese formato.")
