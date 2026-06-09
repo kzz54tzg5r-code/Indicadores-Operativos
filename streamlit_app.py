@@ -14,10 +14,16 @@ st.markdown("""
     .main-title { color: #000000; font-size: 34px; font-weight: 800; margin-bottom: 0px; }
     .sub-title { color: #E6007E; font-size: 15px; font-weight: bold; margin-top: -5px; text-transform: uppercase; }
     .graph-title { color: #1F497D; font-weight: bold; font-size: 18px; margin-top: 35px; margin-bottom: 15px; border-left: 5px solid #1F497D; padding-left: 10px; }
+    
+    /* Estilos para las tarjetas de resumen macro */
+    .macro-card-header { background-color: #1F497D; color: white; text-align: center; padding: 8px; border-radius: 4px 4px 0 0; font-weight: bold; font-size: 14px; margin-bottom: 0; }
+    .macro-card-body { background-color: #F8F9FA; border: 1px solid #D9D9D9; border-top: none; border-radius: 0 0 4px 4px; padding: 12px; text-align: center; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .macro-label { color: #555555; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 2px; }
+    .macro-value { color: #1F497D; font-size: 18px; font-weight: bold; margin-bottom: 0; }
+    .macro-pct { color: #E6007E; font-size: 14px; font-weight: bold; }
+    .macro-divider { border-top: 1px dashed #D9D9D9; margin: 8px 0; }
+    
     .kpi-card { background-color: #F8F9FA; border: 1px solid #D9D9D9; border-radius: 4px; padding: 15px; text-align: center; }
-    .kpi-label { color: #555555; font-size: 12px; font-weight: bold; }
-    .kpi-value { color: #1F497D; font-size: 22px; font-weight: bold; }
-    .kpi-pct { color: #E6007E; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -26,82 +32,51 @@ st.markdown("""
 # =========================================================================
 @st.cache_data(ttl=600)
 def load_all_data():
-    # URL de descarga directa para Google Sheets publicados como XLSX
-    # IMPORTANTE: El usuario debe haber publicado "Todo el documento" como "Microsoft Excel (.xlsx)"
     URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSV6dtosg0Ydt0o3NMFezC--NjHfEW82onFeY2JR4PTYD3ylG4ZlRaQBquscFrCy_Lysrau9zTW6dkn/pub?output=xlsx"
     
     try:
         response = requests.get(URL, timeout=30)
         response.raise_for_status()
-        
-        # Cargar el archivo Excel completo
         xls = pd.ExcelFile(BytesIO(response.content), engine='openpyxl')
         
         data_rows = []
-        # Lista de tiendas a buscar en las hojas
         tiendas_objetivo = ['Vallejo', 'Arco Norte', 'Puebla Sur', 'Miravalle', 'Ecatepec']
         
         for sheet_name in xls.sheet_names:
-            # Procesar solo pestañas que parezcan semanas (Sem 20, Sem 21, etc.)
-            if not sheet_name.lower().strip().startswith('sem'):
-                continue
-                
-            # Leer la hoja completa
+            if not sheet_name.lower().strip().startswith('sem'): continue
             df_raw = pd.read_excel(xls, sheet_name=sheet_name, header=None, engine='openpyxl')
             current_date = "Sin Fecha"
             
             for i, row in df_raw.iterrows():
                 if len(row) < 2: continue
                 val = str(row[1]).strip()
-                
-                # Identificar fila de fecha
                 if '2026' in val and ',' in val:
                     current_date = val
                     continue
-                
-                # Identificar fila de tienda
                 if any(t.lower() in val.lower() for t in tiendas_objetivo) and len(val) < 30:
                     try:
-                        # Extraer mes del nombre de la fecha
                         mes_ext = 'Mayo' if 'mayo' in current_date.lower() else ('Junio' if 'junio' in current_date.lower() else 'Julio-Dic')
-                        
                         data_rows.append({
                             'Mes': mes_ext,
                             'Semana': sheet_name.strip(),
                             'Tienda': val,
-                            'Sis_Aduana': row[2],
-                            'Muertos': row[4],
-                            'Cajas': row[5],
-                            'Meta_Rec': row[7],
-                            'Real_Rec': row[8],
-                            'Habilitadas': row[10],
-                            'Ubicadas': row[11]
+                            'Sis_Aduana': row[2], 'Muertos': row[4], 'Cajas': row[5],
+                            'Meta_Rec': row[7], 'Real_Rec': row[8],
+                            'Habilitadas': row[10], 'Ubicadas': row[11]
                         })
-                    except Exception:
-                        continue
+                    except Exception: continue
 
-        if not data_rows:
-            return pd.DataFrame()
-            
+        if not data_rows: return pd.DataFrame()
         df = pd.DataFrame(data_rows)
-        
-        # Limpiar y convertir a números
         def clean_num(x):
-            try:
-                if pd.isna(x): return 0.0
-                s = str(x).replace(',', '').replace('%', '').strip()
-                return float(s)
-            except:
-                return 0.0
-
+            try: return float(str(x).replace(',', '').replace('%', '').strip())
+            except: return 0.0
         for col in ['Sis_Aduana', 'Muertos', 'Cajas', 'Meta_Rec', 'Real_Rec', 'Habilitadas', 'Ubicadas']:
             df[col] = df[col].apply(clean_num)
-        
         df['Total_Ingresos'] = df['Sis_Aduana'] + df['Muertos'] + df['Cajas']
         return df
-        
     except Exception as e:
-        st.error(f"Error al cargar datos del Excel: {e}")
+        st.error(f"Error al cargar datos: {e}")
         return pd.DataFrame()
 
 # =========================================================================
@@ -113,69 +88,75 @@ st.markdown('<p class="main-title">👚 PRICE SHOES • Operaciones Ropa</p>', u
 st.markdown('<p class="sub-title">DASHBOARD ANUAL CONSOLIDADO</p>', unsafe_allow_html=True)
 
 if not df.empty:
-    st.sidebar.markdown("### 🔍 Filtros de Reporte")
+    # --- RESUMEN MACRO (ÚLTIMAS 4 SEMANAS) ---
+    st.markdown('<p class="graph-title">📊 Resumen Macro Operativo (Últimas 4 Semanas)</p>', unsafe_allow_html=True)
     
-    # Filtro Mes
-    meses = ["Todos"] + sorted(df['Mes'].unique().tolist())
-    sel_mes = st.sidebar.selectbox("Selecciona Mes:", meses)
-    df_mes = df if sel_mes == "Todos" else df[df['Mes'] == sel_mes]
+    # Obtener las últimas 4 semanas ordenadas
+    all_weeks_sorted = sorted(df['Semana'].unique().tolist(), key=lambda x: int(''.join(filter(str.isdigit, x)) or 0))
+    last_4_weeks = all_weeks_sorted[-4:]
     
-    # Filtro Semana
-    semanas = ["Todas"] + sorted(df_mes['Semana'].unique().tolist(), key=lambda x: int(''.join(filter(str.isdigit, x)) or 0))
-    sel_sem = st.sidebar.selectbox("Selecciona Semana:", semanas)
-    
-    # Filtro Tienda
-    tiendas = ["Todas"] + sorted(df['Tienda'].unique().tolist())
-    sel_tienda = st.sidebar.selectbox("Selecciona Tienda:", tiendas)
+    cols_macro = st.columns(4)
+    for i, sem in enumerate(last_4_weeks):
+        df_sem = df[df['Semana'] == sem]
+        ing = df_sem['Total_Ingresos'].sum()
+        hab = df_sem['Habilitadas'].sum()
+        ubi = df_sem['Ubicadas'].sum()
+        met = df_sem['Meta_Rec'].sum()
+        rea = df_sem['Real_Rec'].sum()
+        
+        pct_hab = (hab/ing*100) if ing > 0 else 0
+        pct_ubi = (ubi/ing*100) if ing > 0 else 0
+        pct_rec = (rea/met*100) if met > 0 else 0
+        
+        with cols_macro[i]:
+            st.markdown(f'<div class="macro-card-header">{sem}</div>', unsafe_allow_html=True)
+            st.markdown(f"""
+                <div class="macro-card-body">
+                    <p class="macro-label">📥 Ingresos</p><p class="macro-value">{ing:,.0f}</p>
+                    <div class="macro-divider"></div>
+                    <p class="macro-label">✨ Habilitado</p><p class="macro-value">{hab:,.0f} <span class="macro-pct">({pct_hab:.1f}%)</span></p>
+                    <div class="macro-divider"></div>
+                    <p class="macro-label">📍 Ubicado</p><p class="macro-value">{ubi:,.0f} <span class="macro-pct">({pct_ubi:.1f}%)</span></p>
+                    <div class="macro-divider"></div>
+                    <p class="macro-label">🎯 % Recorridos</p><p class="macro-value">{pct_rec:.1f}%</p>
+                </div>
+            """, unsafe_allow_html=True)
 
-    # Aplicar filtros
+    # --- FILTROS DE REPORTE ---
+    st.sidebar.markdown("### 🔍 Filtros Detallados")
+    sel_mes = st.sidebar.selectbox("Mes:", ["Todos"] + sorted(df['Mes'].unique().tolist()))
+    df_mes = df if sel_mes == "Todos" else df[df['Mes'] == sel_mes]
+    sel_sem = st.sidebar.selectbox("Semana:", ["Todas"] + sorted(df_mes['Semana'].unique().tolist(), key=lambda x: int(''.join(filter(str.isdigit, x)) or 0)))
+    sel_tienda = st.sidebar.selectbox("Tienda:", ["Todas"] + sorted(df['Tienda'].unique().tolist()))
+
     df_f = df_mes.copy()
     if sel_sem != "Todas": df_f = df_f[df_f['Semana'] == sel_sem]
     if sel_tienda != "Todas": df_f = df_f[df_f['Tienda'] == sel_tienda]
 
-    # Visualización de KPIs
-    st.markdown(f"### 📊 Reporte: {sel_mes} / {sel_sem} / {sel_tienda}")
+    # Visualización Detallada
+    st.markdown(f"### 📈 Detalle: {sel_mes} / {sel_sem} / {sel_tienda}")
     
-    c1, c2, c3, c4 = st.columns(4)
-    ing, hab, ubi = df_f['Total_Ingresos'].sum(), df_f['Habilitadas'].sum(), df_f['Ubicadas'].sum()
-    met, rea = df_f['Meta_Rec'].sum(), df_f['Real_Rec'].sum()
-    
-    c1.markdown(f'<div class="kpi-card"><p class="kpi-label">📥 INGRESOS</p><p class="kpi-value">{ing:,.0f}</p></div>', unsafe_allow_html=True)
-    c2.markdown(f'<div class="kpi-card"><p class="kpi-label">✨ HABILITADO</p><p class="kpi-value">{hab:,.0f} <small class="kpi-pct">({(hab/ing*100 if ing>0 else 0):.1f}%)</small></p></div>', unsafe_allow_html=True)
-    c3.markdown(f'<div class="kpi-card"><p class="kpi-label">📍 UBICADO</p><p class="kpi-value">{ubi:,.0f} <small class="kpi-pct">({(ubi/ing*100 if ing>0 else 0):.1f}%)</small></p></div>', unsafe_allow_html=True)
-    c4.markdown(f'<div class="kpi-card"><p class="kpi-label">🎯 RECORRIDOS</p><p class="kpi-value">{(rea/met*100 if met>0 else 0):.1f}%</p></div>', unsafe_allow_html=True)
-
-    # Gráfico de Evolución
-    if sel_sem == "Todas":
-        st.markdown('<p class="graph-title">Tendencia Semanal de Operación</p>', unsafe_allow_html=True)
-        df_t = df_f.groupby('Semana').agg({'Total_Ingresos':'sum', 'Habilitadas':'sum'}).reset_index()
-        df_t['orden'] = df_t['Semana'].apply(lambda x: int(''.join(filter(str.isdigit, x)) or 0))
-        df_t = df_t.sort_values('orden')
-        
+    # Gráficos
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown('<p class="graph-title">Ingresos vs Habilitado por Tienda</p>', unsafe_allow_html=True)
+        df_g = df_f.groupby('Tienda').agg({'Total_Ingresos':'sum', 'Habilitadas':'sum'}).reset_index().sort_values('Total_Ingresos', ascending=False)
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df_t['Semana'], y=df_t['Total_Ingresos'], name="Ingresos", line=dict(color='#1F497D', width=3)))
-        fig.add_trace(go.Scatter(x=df_t['Semana'], y=df_t['Habilitadas'], name="Habilitado", line=dict(color='#E6007E', width=3)))
-        fig.update_layout(plot_bgcolor='white', height=400, margin=dict(t=10, b=10))
+        fig.add_trace(go.Bar(x=df_g['Tienda'], y=df_g['Total_Ingresos'], name="Ingresos", marker_color='#1F497D'))
+        fig.add_trace(go.Bar(x=df_g['Tienda'], y=df_g['Habilitadas'], name="Habilitado", marker_color='#E6007E'))
+        fig.update_layout(barmode='group', plot_bgcolor='white', height=350, margin=dict(t=10, b=10))
         st.plotly_chart(fig, use_container_width=True)
+    
+    with c2:
+        st.markdown('<p class="graph-title">Cumplimiento de Recorridos (%)</p>', unsafe_allow_html=True)
+        df_r = df_f.groupby('Tienda').agg({'Real_Rec':'sum', 'Meta_Rec':'sum'}).reset_index()
+        df_r['% Recorridos'] = (df_r['Real_Rec'] / df_r['Meta_Rec'] * 100).fillna(0)
+        fig2 = go.Figure(go.Bar(x=df_r['Tienda'], y=df_r['% Recorridos'], marker_color='#1F497D', text=df_r['% Recorridos'].map('{:.1f}%'.format), textposition='auto'))
+        fig2.update_layout(plot_bgcolor='white', height=350, margin=dict(t=10, b=10))
+        st.plotly_chart(fig2, use_container_width=True)
 
-    # Ranking por Tienda
-    st.markdown('<p class="graph-title">Comparativo por Sucursal</p>', unsafe_allow_html=True)
-    df_g = df_f.groupby('Tienda').agg({'Total_Ingresos':'sum', 'Habilitadas':'sum'}).reset_index().sort_values('Total_Ingresos', ascending=False)
-    fig2 = go.Figure()
-    fig2.add_trace(go.Bar(x=df_g['Tienda'], y=df_g['Total_Ingresos'], name="Ingresos", marker_color='#1F497D'))
-    fig2.add_trace(go.Bar(x=df_g['Tienda'], y=df_g['Habilitadas'], name="Habilitado", marker_color='#E6007E'))
-    fig2.update_layout(barmode='group', plot_bgcolor='white', height=400)
-    st.plotly_chart(fig2, use_container_width=True)
-
-    # Matriz Detallada
-    with st.expander("Ver Matriz de Datos Detallada"):
-        st.dataframe(df_f.groupby(['Mes', 'Semana', 'Tienda']).agg({
-            'Total_Ingresos': 'sum',
-            'Habilitadas': 'sum',
-            'Ubicadas': 'sum',
-            'Real_Rec': 'sum',
-            'Meta_Rec': 'sum'
-        }).reset_index(), use_container_width=True)
-
+    # Tabla
+    with st.expander("Ver Matriz de Datos"):
+        st.dataframe(df_f.groupby(['Mes', 'Semana', 'Tienda']).agg({'Total_Ingresos': 'sum', 'Habilitadas': 'sum', 'Ubicadas': 'sum', 'Real_Rec': 'sum', 'Meta_Rec': 'sum'}).reset_index(), use_container_width=True)
 else:
-    st.info("No se detectaron datos. Por favor, asegúrate de publicar el Google Sheet como Excel (.xlsx) y seleccionar 'Todo el documento'.")
+    st.info("Esperando datos... Asegúrate de publicar el Google Sheet como Excel (.xlsx) y seleccionar 'Todo el documento'.")
