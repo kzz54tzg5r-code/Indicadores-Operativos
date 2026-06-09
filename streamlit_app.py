@@ -7,7 +7,7 @@ from io import BytesIO
 # =========================================================================
 # --- CONFIGURACIÓN EJECUTIVA Y ESTILOS ---
 # =========================================================================
-st.set_page_config(page_title="Price Shoes - Intelligence WoW", layout="wide", page_icon="👚")
+st.set_page_config(page_title="Price Shoes - Intelligence Master DB", layout="wide", page_icon="👚")
 
 st.markdown("""
     <style>
@@ -15,7 +15,7 @@ st.markdown("""
     .sub-title { color: #E6007E; font-size: 14px; font-weight: 800; margin-top: -5px; text-transform: uppercase; }
     .section-header { color: #1F497D; font-weight: 800; font-size: 18px; margin-top: 25px; margin-bottom: 10px; border-left: 5px solid #E6007E; padding-left: 10px; }
     
-    /* Tarjetas WoW (Semana vs Semana) */
+    /* Tarjetas WoW */
     .wow-card-header { background-color: #1F497D; color: white; text-align: center; padding: 6px; border-radius: 6px 6px 0 0; font-weight: bold; font-size: 13px; }
     .wow-card-body { background-color: #F8F9FA; border: 1px solid #E0E0E0; border-top: none; border-radius: 0 0 6px 6px; padding: 12px; margin-bottom: 15px; }
     .wow-metric-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; border-bottom: 1px solid #EEE; padding-bottom: 4px; }
@@ -32,152 +32,162 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # =========================================================================
-# --- MOTOR DE DATOS ---
+# --- MOTOR DE DATOS (GOOGLE DRIVE CSV) ---
 # =========================================================================
 @st.cache_data(ttl=600)
-def load_data():
-    URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSV6dtosg0Ydt0o3NMFezC--NjHfEW82onFeY2JR4PTYD3ylG4ZlRaQBquscFrCy_Lysrau9zTW6dkn/pub?output=xlsx"
+def load_master_db():
+    # ID del archivo CSV compartido en Google Drive
+    FILE_ID = "15UBabZ8g_VbDMZiPfR2iuW-U9YuNgHWP"
+    URL = f"https://drive.google.com/uc?export=download&id={FILE_ID}"
+    
     try:
-        response = requests.get(URL, timeout=30)
-        xls = pd.ExcelFile(BytesIO(response.content), engine='openpyxl')
-        data_rows = []
-        tiendas = ['Vallejo', 'Arco Norte', 'Puebla Sur', 'Miravalle', 'Ecatepec']
-        meses_m = {'enero':'Enero', 'febrero':'Febrero', 'marzo':'Marzo', 'abril':'Abril', 'mayo':'Mayo', 'junio':'Junio', 'julio':'Julio', 'agosto':'Agosto', 'septiembre':'Septiembre', 'octubre':'Octubre', 'noviembre':'Noviembre', 'diciembre':'Diciembre'}
-
-        for sheet in xls.sheet_names:
-            if not sheet.lower().startswith('sem'): continue
-            df_s = pd.read_excel(xls, sheet_name=sheet, header=None, engine='openpyxl')
-            dt = "Sin Fecha"
-            for i, r in df_s.iterrows():
-                if len(r) < 2: continue
-                v = str(r[1]).strip()
-                if '2026' in v and ',' in v: dt = v; continue
-                if any(t.lower() in v.lower() for t in tiendas) and len(v) < 30:
-                    try:
-                        m_ext = "Otros"
-                        for k, val in meses_m.items():
-                            if k in dt.lower(): m_ext = val; break
-                        data_rows.append({
-                            'Mes': m_ext, 'Semana': sheet.strip(), 'Tienda': v,
-                            'Ing_Sis': r[2], 'Ing_Muertos': r[4], 'Ing_Cajas': r[5],
-                            'Meta_Rec': r[7], 'Real_Rec': r[8], 'Pzas_Rec': r[9],
-                            'Pzas_Hab': r[10], 'Pzas_Ubi': r[11]
-                        })
-                    except: continue
-        df = pd.DataFrame(data_rows)
-        for c in ['Ing_Sis', 'Ing_Muertos', 'Ing_Cajas', 'Meta_Rec', 'Real_Rec', 'Pzas_Rec', 'Pzas_Hab', 'Pzas_Ubi']:
-            df[c] = df[c].apply(lambda x: float(str(x).replace(',', '').replace('%', '').strip()) if pd.notna(x) else 0.0)
-        df['Total_Ingresos'] = df['Ing_Sis'] + df['Ing_Muertos'] + df['Ing_Cajas']
+        response = requests.get(URL, timeout=60)
+        df = pd.read_csv(BytesIO(response.content), encoding='latin1', low_memory=False)
+        
+        # Limpieza de columnas
+        df.columns = [c.strip() for c in df.columns]
+        
+        # Convertir fecha a datetime
+        # El formato en el CSV parece ser YYYY-MM-DD HH:MM:SS en la columna 'Fecha'
+        df['Fecha_dt'] = pd.to_datetime(df['Fecha'], errors='coerce')
+        df = df.dropna(subset=['Fecha_dt'])
+        
+        # Extraer Semana y Mes
+        df['Semana'] = "Sem " + df['Fecha_dt'].dt.isocalendar().week.astype(str)
+        meses_dict = {1:'Enero', 2:'Febrero', 3:'Marzo', 4:'Abril', 5:'Mayo', 6:'Junio', 7:'Julio', 8:'Agosto', 9:'Septiembre', 10:'Octubre', 11:'Noviembre', 12:'Diciembre'}
+        df['Mes'] = df['Fecha_dt'].dt.month.map(meses_dict)
+        
+        # Renombrar Ubicación para consistencia
+        df = df.rename(columns={'Ubicación': 'Tienda', 'Número de Piezas': 'Pzas'})
+        
+        # Pivotar para obtener indicadores por fila operativa
+        # Mapeo:
+        # Ingreso = Actividad 'Ingreso'
+        # Habilitado = Actividad 'Acondicionado'
+        # Ubicado = Actividad 'Ubicado'
+        # Recorridos = Actividad 'Recolección de muertos' y RECORRIDOs == 1
+        
+        df['Es_Ingreso'] = df.apply(lambda r: r['Pzas'] if r['Actividad Realizada'] == 'Ingreso' else 0, axis=1)
+        df['Es_Hab'] = df.apply(lambda r: r['Pzas'] if r['Actividad Realizada'] == 'Acondicionado' else 0, axis=1)
+        df['Es_Ubi'] = df.apply(lambda r: r['Pzas'] if r['Actividad Realizada'] == 'Ubicado' else 0, axis=1)
+        df['Es_Rec'] = df.apply(lambda r: 1 if (r['Actividad Realizada'] == 'Recolección de muertos' and str(r['RECORRIDOs']) == '1') else 0, axis=1)
+        
         return df
-    except: return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error al conectar con la Base de Datos: {e}")
+        return pd.DataFrame()
 
-df = load_data()
+df_raw = load_master_db()
 
 # --- HEADER ---
-st.markdown('<p class="main-title">PRICE SHOES • Business Intelligence</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-title">ANÁLISIS COMPARATIVO SEMANA CONTRA SEMANA (WoW)</p>', unsafe_allow_html=True)
+st.markdown('<p class="main-title">PRICE SHOES • Master Database Intelligence</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-title">CONTROL OPERATIVO INTEGRAL (CAMBIOS Y MUERTOS)</p>', unsafe_allow_html=True)
 
-if not df.empty:
-    # --- SIDEBAR ---
-    st.sidebar.markdown("### 🔍 Filtros Generales")
-    sel_tienda = st.sidebar.selectbox("Unidad de Negocio:", ["Consolidado"] + sorted(df['Tienda'].unique().tolist()))
+if not df_raw.empty:
+    # --- FILTROS ---
+    st.sidebar.markdown("### 🔍 Filtros de Reporte")
     
-    df_f = df.copy()
+    meses_presentes = sorted(df_raw['Mes'].unique().tolist(), key=lambda x: ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'].index(x))
+    sel_mes = st.sidebar.selectbox("Periodo Mensual:", ["Anual"] + meses_presentes)
+    
+    df_m = df_raw if sel_mes == "Anual" else df_raw[df_raw['Mes'] == sel_mes]
+    
+    semanas = ["Todas las Semanas"] + sorted(df_m['Semana'].unique().tolist(), key=lambda x: int(''.join(filter(str.isdigit, x)) or 0))
+    sel_sem = st.sidebar.selectbox("Corte Semanal:", semanas)
+    
+    tiendas = ["Consolidado"] + sorted(df_raw['Tienda'].unique().tolist())
+    sel_tienda = st.sidebar.selectbox("Unidad de Negocio:", tiendas)
+
+    # Filtrado Final
+    df_f = df_m.copy()
+    if sel_sem != "Todas las Semanas": df_f = df_f[df_f['Semana'] == sel_sem]
     if sel_tienda != "Consolidado": df_f = df_f[df_f['Tienda'] == sel_tienda]
 
-    # --- TARJETAS WoW (ÚLTIMAS 4 SEMANAS) ---
-    st.markdown('<p class="section-header">📊 Resumen Operativo WoW (Últimas 4 Semanas)</p>', unsafe_allow_html=True)
+    # --- TARJETAS WoW (DINÁMICAS) ---
+    st.markdown('<p class="section-header">📊 Resumen Ejecutivo WoW (Dinámico)</p>', unsafe_allow_html=True)
     
-    weeks = sorted(df['Semana'].unique().tolist(), key=lambda x: int(''.join(filter(str.isdigit, x)) or 0))
-    last_4 = weeks[-4:]
+    all_weeks = sorted(df_raw['Semana'].unique().tolist(), key=lambda x: int(''.join(filter(str.isdigit, x)) or 0))
+    # Si filtramos por mes, solo mostramos las semanas de ese mes
+    weeks_to_show = sorted(df_f['Semana'].unique().tolist(), key=lambda x: int(''.join(filter(str.isdigit, x)) or 0))[-4:]
     
-    cols = st.columns(4)
-    for i, sem in enumerate(last_4):
-        # Datos Semana Actual
-        df_curr = df_f[df_f['Semana'] == sem]
-        ing = df_curr['Total_Ingresos'].sum()
-        hab = df_curr['Pzas_Hab'].sum()
-        ubi = df_curr['Pzas_Ubi'].sum()
-        rec = (df_curr['Real_Rec'].sum() / df_curr['Meta_Rec'].sum() * 100) if df_curr['Meta_Rec'].sum() > 0 else 0
-        
-        # Datos Semana Anterior (para flechas)
-        idx = weeks.index(sem)
-        if idx > 0:
-            sem_prev = weeks[idx-1]
-            df_prev = df_f[df_f['Semana'] == sem_prev]
-            ing_p = df_prev['Total_Ingresos'].sum()
-            hab_p = df_prev['Pzas_Hab'].sum()
-            ubi_p = df_prev['Pzas_Ubi'].sum()
-            rec_p = (df_prev['Real_Rec'].sum() / df_prev['Meta_Rec'].sum() * 100) if df_prev['Meta_Rec'].sum() > 0 else 0
+    if weeks_to_show:
+        cols_w = st.columns(len(weeks_to_show))
+        for i, sem in enumerate(weeks_to_show):
+            # Actual
+            df_curr = df_raw[(df_raw['Semana'] == sem)]
+            if sel_tienda != "Consolidado": df_curr = df_curr[df_curr['Tienda'] == sel_tienda]
             
-            def get_trend(curr, prev):
-                if prev == 0: return "—", "trend-neutral"
-                diff = ((curr - prev) / prev) * 100
-                if diff > 0.5: return f"▲ {diff:.1f}%", "trend-up"
-                if diff < -0.5: return f"▼ {abs(diff):.1f}%", "trend-down"
-                return "● 0%", "trend-neutral"
+            ing = df_curr['Es_Ingreso'].sum()
+            hab = df_curr['Es_Hab'].sum()
+            ubi = df_curr['Es_Ubi'].sum()
+            rec = df_curr['Es_Rec'].sum()
             
-            t_ing, c_ing = get_trend(ing, ing_p)
-            t_hab, c_hab = get_trend(hab, hab_p)
-            t_ubi, c_ubi = get_trend(ubi, ubi_p)
-            t_rec, c_rec = get_trend(rec, rec_p)
-        else:
-            t_ing, t_hab, t_ubi, t_rec = "—", "—", "—", "—"
-            c_ing = c_hab = c_ubi = c_rec = "trend-neutral"
+            # Anterior para tendencia
+            idx = all_weeks.index(sem)
+            if idx > 0:
+                sem_p = all_weeks[idx-1]
+                df_prev = df_raw[(df_raw['Semana'] == sem_p)]
+                if sel_tienda != "Consolidado": df_prev = df_prev[df_prev['Tienda'] == sel_tienda]
+                
+                ing_p, hab_p, ubi_p, rec_p = df_prev['Es_Ingreso'].sum(), df_prev['Es_Hab'].sum(), df_prev['Es_Ubi'].sum(), df_prev['Es_Rec'].sum()
+                
+                def trend(c, p):
+                    if p == 0: return "—", "trend-neutral"
+                    d = ((c-p)/p)*100
+                    if d > 0.5: return f"▲ {d:.1f}%", "trend-up"
+                    if d < -0.5: return f"▼ {abs(d):.1f}%", "trend-down"
+                    return "● 0%", "trend-neutral"
+                
+                t_ing, c_ing = trend(ing, ing_p)
+                t_hab, c_hab = trend(hab, hab_p)
+                t_ubi, c_ubi = trend(ubi, ubi_p)
+                t_rec, c_rec = trend(rec, rec_p)
+            else:
+                t_ing = t_hab = t_ubi = t_rec = "—"
+                c_ing = c_hab = c_ubi = c_rec = "trend-neutral"
 
-        with cols[i]:
-            st.markdown(f'<div class="wow-card-header">{sem}</div>', unsafe_allow_html=True)
-            st.markdown(f"""
-                <div class="wow-card-body">
-                    <div class="wow-metric-row"><span class="wow-label">Ingresos</span><span class="wow-value">{ing:,.0f}</span><span class="wow-trend {c_ing}">{t_ing}</span></div>
-                    <div class="wow-metric-row"><span class="wow-label">Habilitado</span><span class="wow-value">{hab:,.0f}</span><span class="wow-trend {c_hab}">{t_hab}</span></div>
-                    <div class="wow-metric-row"><span class="wow-label">Ubicado</span><span class="wow-value">{ubi:,.0f}</span><span class="wow-trend {c_ubi}">{t_ubi}</span></div>
-                    <div class="wow-metric-row"><span class="wow-label">% Recorridos</span><span class="wow-value">{rec:.1f}%</span><span class="wow-trend {c_rec}">{t_rec}</span></div>
-                </div>
-            """, unsafe_allow_html=True)
+            with cols_w[i]:
+                st.markdown(f'<div class="wow-card-header">{sem}</div>', unsafe_allow_html=True)
+                st.markdown(f"""
+                    <div class="wow-card-body">
+                        <div class="wow-metric-row"><span class="wow-label">Ingresos</span><span class="wow-value">{ing:,.0f}</span><span class="wow-trend {c_ing}">{t_ing}</span></div>
+                        <div class="wow-metric-row"><span class="wow-label">Habilitado</span><span class="wow-value">{hab:,.0f}</span><span class="wow-trend {c_hab}">{t_hab}</span></div>
+                        <div class="wow-metric-row"><span class="wow-label">Ubicado</span><span class="wow-value">{ubi:,.0f}</span><span class="wow-trend {c_ubi}">{t_ubi}</span></div>
+                        <div class="wow-metric-row"><span class="wow-label">Recorridos</span><span class="wow-value">{rec:,.0f}</span><span class="wow-trend {c_rec}">{t_rec}</span></div>
+                    </div>
+                """, unsafe_allow_html=True)
 
-    # --- PESTAÑAS DE ANÁLISIS ---
-    tab1, tab2 = st.tabs(["📈 ANÁLISIS DE TENDENCIAS", "🔍 DETALLE POR SUCURSAL"])
+    # --- ANÁLISIS GRÁFICO ---
+    tab1, tab2 = st.tabs(["📈 TENDENCIAS", "🔍 AUDITORÍA"])
     
     with tab1:
-        c_g1, c_g2 = st.columns(2)
-        with c_g1:
-            st.markdown('<p class="section-header">Mezcla de Ingresos (Fuentes)</p>', unsafe_allow_html=True)
-            df_m = df_f.groupby('Semana').agg({'Ing_Sis':'sum', 'Ing_Muertos':'sum', 'Ing_Cajas':'sum'}).reset_index()
-            df_m['n'] = df_m['Semana'].apply(lambda x: int(''.join(filter(str.isdigit, x)) or 0))
-            df_m = df_m.sort_values('n')
+        cg1, cg2 = st.columns(2)
+        with cg1:
+            st.markdown('<p class="section-header">Evolución de Ingresos vs Habilitado</p>', unsafe_allow_html=True)
+            df_ev = df_f.groupby('Semana').agg({'Es_Ingreso':'sum', 'Es_Hab':'sum'}).reset_index()
+            df_ev['n'] = df_ev['Semana'].apply(lambda x: int(''.join(filter(str.isdigit, x)) or 0))
+            df_ev = df_ev.sort_values('n')
             fig1 = go.Figure()
-            fig1.add_trace(go.Bar(x=df_m['Semana'], y=df_m['Ing_Sis'], name="Sistema", marker_color='#1F497D'))
-            fig1.add_trace(go.Bar(x=df_m['Semana'], y=df_m['Ing_Muertos'], name="Muertos", marker_color='#E6007E'))
-            fig1.add_trace(go.Bar(x=df_m['Semana'], y=df_m['Ing_Cajas'], name="Cajas", marker_color='#A6A6A6'))
-            fig1.update_layout(barmode='stack', height=350, plot_bgcolor='white', margin=dict(t=0, b=0))
+            fig1.add_trace(go.Scatter(x=df_ev['Semana'], y=df_ev['Es_Ingreso'], name="Ingresos", line=dict(color='#1F497D', width=3)))
+            fig1.add_trace(go.Scatter(x=df_ev['Semana'], y=df_ev['Es_Hab'], name="Habilitado", line=dict(color='#E6007E', width=3)))
+            fig1.update_layout(plot_bgcolor='white', height=350, margin=dict(t=0, b=0))
             st.plotly_chart(fig1, use_container_width=True, config={'staticPlot': True})
             
-        with c_g2:
-            st.markdown('<p class="section-header">Eficiencia: Habilitado vs Ubicado</p>', unsafe_allow_html=True)
-            df_e = df_f.groupby('Semana').agg({'Pzas_Hab':'sum', 'Pzas_Ubi':'sum'}).reset_index()
-            df_e['n'] = df_e['Semana'].apply(lambda x: int(''.join(filter(str.isdigit, x)) or 0))
-            df_e = df_e.sort_values('n')
+        with cg2:
+            st.markdown('<p class="section-header">Distribución Operativa por Tienda</p>', unsafe_allow_html=True)
+            df_tienda = df_f.groupby('Tienda').agg({'Es_Ingreso':'sum', 'Es_Ubi':'sum'}).reset_index().sort_values('Es_Ingreso', ascending=False)
             fig2 = go.Figure()
-            fig2.add_trace(go.Scatter(x=df_e['Semana'], y=df_e['Pzas_Hab'], name="Habilitado", line=dict(color='#E6007E', width=3)))
-            fig2.add_trace(go.Scatter(x=df_e['Semana'], y=df_e['Pzas_Ubi'], name="Ubicado", line=dict(color='#1F497D', width=3), fill='tonexty'))
-            fig2.update_layout(height=350, plot_bgcolor='white', margin=dict(t=0, b=0))
+            fig2.add_trace(go.Bar(x=df_tienda['Tienda'], y=df_tienda['Es_Ingreso'], name="Ingreso", marker_color='#1F497D'))
+            fig2.add_trace(go.Bar(x=df_tienda['Tienda'], y=df_tienda['Es_Ubi'], name="Ubicado", marker_color='#E6007E'))
+            fig2.update_layout(barmode='group', plot_bgcolor='white', height=350)
             st.plotly_chart(fig2, use_container_width=True, config={'staticPlot': True})
 
     with tab2:
-        st.markdown('<p class="section-header">Rendimiento Operativo por Tienda</p>', unsafe_allow_html=True)
-        df_t = df_f.groupby('Tienda').agg({'Total_Ingresos':'sum', 'Pzas_Hab':'sum', 'Pzas_Ubi':'sum', 'Real_Rec':'sum', 'Meta_Rec':'sum'}).reset_index()
-        df_t['% Recorridos'] = (df_t['Real_Rec'] / df_t['Meta_Rec'] * 100).fillna(0).round(1)
-        
-        c_t1, c_t2 = st.columns([2, 1])
-        with c_t1:
-            fig_t = go.Figure()
-            fig_t.add_trace(go.Bar(x=df_t['Tienda'], y=df_t['Total_Ingresos'], name="Ingresos", marker_color='#1F497D'))
-            fig_t.add_trace(go.Bar(x=df_t['Tienda'], y=df_t['Pzas_Hab'], name="Habilitado", marker_color='#E6007E'))
-            fig_t.update_layout(barmode='group', height=400, plot_bgcolor='white')
-            st.plotly_chart(fig_t, use_container_width=True, config={'staticPlot': True})
-        with c_t2:
-            st.dataframe(df_t[['Tienda', 'Total_Ingresos', '% Recorridos']].sort_values('Total_Ingresos', ascending=False), use_container_width=True)
+        st.markdown('<p class="section-header">Matriz Consolidada de Auditoría</p>', unsafe_allow_html=True)
+        df_audit = df_f.groupby(['Mes', 'Semana', 'Tienda']).agg({
+            'Es_Ingreso': 'sum', 'Es_Hab': 'sum', 'Es_Ubi': 'sum', 'Es_Rec': 'sum'
+        }).reset_index()
+        st.dataframe(df_audit, use_container_width=True)
 
 else:
-    st.info("📊 El dashboard está listo. Asegúrate de publicar el Google Sheet como Excel (.xlsx) y seleccionar 'Todo el documento'.")
+    st.info("📊 Conectando con la base de datos maestra en Google Drive...")
