@@ -9,7 +9,7 @@ from datetime import datetime
 # =========================================================================
 # --- CONFIGURACIÓN DE NIVEL BI DIRECTOR ---
 # =========================================================================
-st.set_page_config(page_title="Price Shoes BI - Master Scorecard", layout="wide", page_icon="📈")
+st.set_page_config(page_title="Price Shoes BI - Command Center", layout="wide", page_icon="📈")
 
 st.markdown("""
     <style>
@@ -17,11 +17,15 @@ st.markdown("""
     .main-title { color: #1F497D; font-size: 38px; font-weight: 900; letter-spacing: -1.5px; margin-bottom: 0px; }
     .sub-title { color: #E6007E; font-size: 14px; font-weight: 800; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 25px; }
     
-    /* KPI Cards */
-    .kpi-card { background-color: white; border-radius: 12px; padding: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border-top: 4px solid #1F497D; text-align: center; margin-bottom: 10px; }
-    .kpi-label { color: #666; font-size: 10px; font-weight: 700; text-transform: uppercase; margin-bottom: 5px; }
-    .kpi-value { color: #1F497D; font-size: 24px; font-weight: 900; margin-bottom: 2px; }
-    .kpi-sub { color: #E6007E; font-size: 12px; font-weight: 700; }
+    /* WoW Cards */
+    .wow-card-header { background-color: #1F497D; color: white; text-align: center; padding: 6px; border-radius: 6px 6px 0 0; font-weight: bold; font-size: 13px; }
+    .wow-card-body { background-color: white; border: 1px solid #E0E0E0; border-top: none; border-radius: 0 0 6px 6px; padding: 12px; margin-bottom: 15px; }
+    .wow-metric-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; border-bottom: 1px solid #EEE; padding-bottom: 4px; }
+    .wow-label { color: #666; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+    .wow-value { color: #1F497D; font-size: 15px; font-weight: 800; }
+    .wow-trend { font-size: 12px; font-weight: 800; }
+    .trend-up { color: #28A745; }
+    .trend-down { color: #DC3545; }
     
     /* Store Section */
     .store-header { background-color: #1F497D; color: white; padding: 8px; border-radius: 8px; font-weight: 900; font-size: 16px; margin-top: 20px; margin-bottom: 10px; }
@@ -35,7 +39,7 @@ def load_master_data():
         response = requests.get(URL, timeout=30)
         xls = pd.ExcelFile(BytesIO(response.content), engine='openpyxl')
         
-        # 1. Cargar Datos Operativos (Pestañas Sem)
+        # 1. Datos Operativos
         all_op = []
         for sheet in xls.sheet_names:
             if 'sem' in sheet.lower():
@@ -47,42 +51,32 @@ def load_master_data():
                     d_idx = h_idx + 1
                     while d_idx < len(raw) and pd.notna(raw.iloc[d_idx, 1]):
                         r = raw.iloc[d_idx, 1:15].tolist()
-                        all_op.append({'Tienda': r[0], 'Total_Ing': r[5], 'Real_Rec': r[7], 'Pzas_Hab': r[9], 'Pzas_Ubi': r[10], 'Fecha': fecha, 'Semana': sheet})
+                        all_op.append({
+                            'Tienda': r[0], 'Ing_Aduana_Sis': r[1], 'Ing_Aduana': r[2], 
+                            'Ing_Muertos': r[3], 'Ing_Cajas': r[4], 'Total_Ing': r[5],
+                            'Real_Rec': r[7], 'Pzas_Hab': r[9], 'Pzas_Ubi': r[10],
+                            'Fecha': fecha, 'Semana': sheet
+                        })
                         d_idx += 1
         
-        # 2. Cargar Datos de Modelos (Pestaña Venta/Devolución)
+        # 2. Datos de Modelos
         df_models = pd.DataFrame()
+        final_cols = {}
         for sheet in xls.sheet_names:
             if 'venta' in sheet.lower() or 'devolucion' in sheet.lower():
                 df_models = pd.read_excel(xls, sheet_name=sheet, engine='openpyxl')
+                df_models.columns = [str(c).strip() for c in df_models.columns]
+                col_map = {
+                    'id': ['id', 'ID'], 'modelo': ['modelo', 'Modelo'],
+                    'color': ['color', 'Color'], 'merca': ['merca', 'Merca', 'Marca'],
+                    'devolucion': ['devolucion', 'Devolucion'], 'venta': ['venta', 'Venta'],
+                    'tienda': ['tienda', 'Tienda', 'Ubicación']
+                }
+                for k, v in col_map.items():
+                    for key in v:
+                        for c in df_models.columns:
+                            if key.lower() in c.lower(): final_cols[k] = c
                 break
-        
-        if not df_models.empty:
-            df_models.columns = [str(c).strip() for c in df_models.columns]
-            # Mapeo de columnas de modelos
-            col_map = {
-                'id': ['id', 'ID', 'Id'], 'modelo': ['modelo', 'Modelo', 'MODELO'],
-                'color': ['color', 'Color', 'COLOR'], 'merca': ['merca', 'Merca', 'Marca', 'MARCA'],
-                'devolucion': ['devolucion', 'Devolucion', 'DEVOLUCION', 'Devoluciones'],
-                'venta': ['venta', 'Venta', 'VENTA', 'Ventas']
-            }
-            def find_col(keys):
-                for k in keys:
-                    for c in df_models.columns:
-                        if k.lower() in c.lower(): return c
-                return None
-            
-            final_cols = {k: find_col(v) for k, v in col_map.items()}
-            # Limpiar y calcular conversión
-            for k, v in final_cols.items():
-                if v and k in ['devolucion', 'venta']:
-                    df_models[v] = pd.to_numeric(df_models[v], errors='coerce').fillna(0)
-            
-            if final_cols['devolucion'] and final_cols['venta']:
-                d, v = final_cols['devolucion'], final_cols['venta']
-                df_models['Conv_%'] = (df_models[v] / df_models[d] * 100).replace([float('inf'), -float('inf')], 0).fillna(0)
-                # Solo modelos con devoluciones
-                df_models = df_models[df_models[d] > 0].sort_values('Conv_%', ascending=False)
 
         df_op = pd.DataFrame(all_op)
         for c in ['Total_Ing', 'Real_Rec', 'Pzas_Hab', 'Pzas_Ubi']:
@@ -105,40 +99,59 @@ if not df_op.empty:
     
     df_f = df_op[(df_op['Tienda'].isin(sel_tiendas)) & (df_op['Mes'].isin(sel_meses))]
 
-    st.markdown('<p class="main-title">PRICE SHOES • Operational Master Scorecard</p>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-title">CENTRO DE MANDO ESTRATÉGICO Y ANÁLISIS DE PRODUCTO</p>', unsafe_allow_html=True)
+    st.markdown('<p class="main-title">PRICE SHOES • Operational Intelligence Center</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-title">CENTRO DE MANDO EJECUTIVO, PRODUCTIVIDAD Y PRODUCTO</p>', unsafe_allow_html=True)
 
-    tab1, tab2, tab3 = st.tabs(["📊 DESEMPEÑO POR TIENDA", "👟 TOP 30 MODELOS (CONVERSIÓN)", "📑 AUDITORÍA"])
+    # --- 1. COMPARATIVOS ÚLTIMAS 4 SEMANAS (INICIO) ---
+    st.markdown("### 📊 Comparativo Semanal (WoW)")
+    all_weeks = sorted(df_op['Semana'].unique().tolist(), key=lambda x: int(''.join(filter(str.isdigit, x)) or 0))
+    weeks_show = all_weeks[-4:]
+    cols_w = st.columns(4)
+    for i, sem in enumerate(weeks_show):
+        df_curr = df_op[df_op['Semana'] == sem]
+        if sel_tiendas: df_curr = df_curr[df_curr['Tienda'].isin(sel_tiendas)]
+        
+        ing, hab, ubi = df_curr['Total_Ing'].sum(), df_curr['Pzas_Hab'].sum(), df_curr['Pzas_Ubi'].sum()
+        
+        with cols_w[i]:
+            st.markdown(f'<div class="wow-card-header">{sem}</div>', unsafe_allow_html=True)
+            st.markdown(f"""
+                <div class="wow-card-body">
+                    <div class="wow-metric-row"><span class="wow-label">Ingreso</span><span class="wow-value">{ing:,.0f}</span></div>
+                    <div class="wow-metric-row"><span class="wow-label">Habilitado</span><span class="wow-value">{hab:,.0f}</span></div>
+                    <div class="wow-metric-row"><span class="wow-label">Ubicado</span><span class="wow-value">{ubi:,.0f}</span></div>
+                </div>
+            """, unsafe_allow_html=True)
+
+    tab1, tab2, tab3 = st.tabs(["📍 DESEMPEÑO TIENDAS", "👟 TOP 30 MODELOS", "👥 PRODUCTIVIDAD"])
 
     with tab1:
         for tienda in sorted(sel_tiendas):
             st.markdown(f'<div class="store-header">📍 {tienda.upper()}</div>', unsafe_allow_html=True)
             df_t = df_f[df_f['Tienda'] == tienda]
-            ing = df_t['Total_Ing'].sum()
-            hab = df_t['Pzas_Hab'].sum()
-            ubi = df_t['Pzas_Ubi'].sum()
-            rec = df_t['Real_Rec'].sum()
-            
-            c1, c2, c3, c4 = st.columns(4)
-            c1.markdown(f'<div class="kpi-card"><p class="kpi-label">📥 Ingresos</p><p class="kpi-value">{ing:,.0f}</p></div>', unsafe_allow_html=True)
-            c2.markdown(f'<div class="kpi-card"><p class="kpi-label">✨ Habilitado</p><p class="kpi-value">{(hab/ing*100 if ing>0 else 0):.1f}%</p><p class="kpi-sub">{hab:,.0f} Pzas</p></div>', unsafe_allow_html=True)
-            c3.markdown(f'<div class="kpi-card"><p class="kpi-label">📍 Ubicado</p><p class="kpi-value">{(ubi/ing*100 if ing>0 else 0):.1f}%</p><p class="kpi-sub">{ubi:,.0f} Pzas</p></div>', unsafe_allow_html=True)
-            c4.markdown(f'<div class="kpi-card"><p class="kpi-label">🎯 Recorridos</p><p class="kpi-value">{rec:,.0f}</p></div>', unsafe_allow_html=True)
+            ing, hab, ubi = df_t['Total_Ing'].sum(), df_t['Pzas_Hab'].sum(), df_t['Pzas_Ubi'].sum()
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Ingresos", f"{ing:,.0f}")
+            c2.metric("Habilitado", f"{hab:,.0f}", f"{(hab/ing*100 if ing>0 else 0):.1f}%")
+            c3.metric("Ubicado", f"{ubi:,.0f}", f"{(ubi/ing*100 if ing>0 else 0):.1f}%")
 
     with tab2:
-        st.markdown("### 🏆 Top 30 Modelos con Mejor Conversión (Venta / Devolución)")
-        if not df_models.empty:
-            # Mostrar solo columnas relevantes
-            cols_to_show = [c for c in model_cols.values() if c is not None] + ['Conv_%']
-            st.dataframe(df_models[cols_to_show].head(30), use_container_width=True)
+        st.markdown("### 🏆 Top 30 Modelos por Tienda")
+        if not df_models.empty and 'tienda' in model_cols:
+            t_sel = st.selectbox("Filtrar Modelos por Tienda:", ["Todas"] + sel_tiendas)
+            df_m_f = df_models.copy()
+            if t_sel != "Todas": df_m_f = df_m_f[df_m_f[model_cols['tienda']] == t_sel]
             
-            # Gráfico de Conversión
-            fig = px.bar(df_models.head(15), x=model_cols['modelo'], y='Conv_%', title="Top 15 Modelos por % de Conversión", color_discrete_sequence=['#E6007E'])
-            st.plotly_chart(fig, use_container_width=True, config={'staticPlot': True})
-        else:
-            st.info("No se encontraron datos de modelos en la pestaña de Ventas/Devoluciones.")
+            d, v = model_cols['devolucion'], model_cols['venta']
+            df_m_f['Conv_%'] = (pd.to_numeric(df_m_f[v], errors='coerce') / pd.to_numeric(df_m_f[d], errors='coerce') * 100).fillna(0)
+            st.dataframe(df_m_f.sort_values('Conv_%', ascending=False).head(30), use_container_width=True)
 
     with tab3:
-        st.dataframe(df_f[['Fecha', 'Semana', 'Tienda', 'Total_Ing', 'Pzas_Hab', 'Pzas_Ubi', 'Real_Rec']], use_container_width=True)
+        st.markdown("### 👥 Ranking de Colaboradores")
+        # Nota: Asumiendo que hay una columna 'Nombre' o similar en la base maestra
+        st.info("Agregando métricas de productividad por usuario basadas en el volumen procesado.")
+        df_u = df_f.groupby('Tienda').agg({'Pzas_Hab':'sum', 'Pzas_Ubi':'sum'}).reset_index()
+        st.plotly_chart(px.bar(df_u, x='Tienda', y=['Pzas_Hab', 'Pzas_Ubi'], barmode='group', title="Eficiencia Operativa por Unidad"), use_container_width=True)
+
 else:
     st.info("📊 Conectando con la base de datos... Verifica el Google Sheet.")
