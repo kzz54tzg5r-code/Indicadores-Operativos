@@ -5,198 +5,189 @@ import requests
 from io import BytesIO
 
 # =========================================================================
-# --- CONFIGURACIÓN DE INTERFAZ Y ESTILOS ---
+# --- CONFIGURACIÓN EJECUTIVA Y ESTILOS ---
 # =========================================================================
-st.set_page_config(page_title="Price Shoes - Operaciones Ropa", layout="wide", page_icon="👚")
+st.set_page_config(page_title="Price Shoes - Inteligencia Operativa", layout="wide", page_icon="📈")
 
+# Estilos de Reporte Ejecutivo (Price Shoes Identity)
 st.markdown("""
     <style>
-    .main-title { color: #000000; font-size: 34px; font-weight: 800; margin-bottom: 0px; }
-    .sub-title { color: #E6007E; font-size: 15px; font-weight: bold; margin-top: -5px; text-transform: uppercase; }
-    .graph-title { color: #1F497D; font-weight: bold; font-size: 18px; margin-top: 35px; margin-bottom: 15px; border-left: 5px solid #1F497D; padding-left: 10px; }
+    /* Estilo General */
+    .main { background-color: #FFFFFF; }
+    .main-title { color: #000000; font-size: 38px; font-weight: 900; margin-bottom: 0px; letter-spacing: -1px; }
+    .sub-title { color: #E6007E; font-size: 14px; font-weight: 800; margin-top: -5px; text-transform: uppercase; letter-spacing: 2px; }
+    .section-header { color: #1F497D; font-weight: 800; font-size: 20px; margin-top: 30px; margin-bottom: 15px; border-left: 6px solid #E6007E; padding-left: 12px; }
     
-    /* Estilos para las tarjetas de resumen macro */
-    .macro-card-header { background-color: #1F497D; color: white; text-align: center; padding: 8px; border-radius: 4px 4px 0 0; font-weight: bold; font-size: 14px; margin-bottom: 0; }
-    .macro-card-body { background-color: #F8F9FA; border: 1px solid #D9D9D9; border-top: none; border-radius: 0 0 4px 4px; padding: 12px; text-align: center; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    .macro-label { color: #555555; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-bottom: 2px; }
-    .macro-value { color: #1F497D; font-size: 18px; font-weight: bold; margin-bottom: 0; }
-    .macro-pct { color: #E6007E; font-size: 14px; font-weight: bold; }
-    .macro-divider { border-top: 1px dashed #D9D9D9; margin: 8px 0; }
+    /* Tarjetas Ejecutivas */
+    .exec-card { background-color: #FDFDFD; border: 1px solid #EAEAEA; border-radius: 8px; padding: 20px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.02); }
+    .exec-label { color: #666666; font-size: 12px; font-weight: 700; text-transform: uppercase; margin-bottom: 8px; }
+    .exec-value { color: #1F497D; font-size: 28px; font-weight: 900; margin-bottom: 5px; }
+    .exec-delta { font-size: 14px; font-weight: 700; }
+    .delta-pos { color: #28A745; }
+    .delta-neg { color: #DC3545; }
+    
+    /* Bloqueo de Gráficos (Estabilidad Web) */
+    .stPlotlyChart { pointer-events: none; } /* Bloquea zoom/scroll accidental */
+    
+    /* Pestañas Personalizadas */
+    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
+    .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #F8F9FA; border-radius: 4px 4px 0 0; padding: 10px 20px; font-weight: 700; color: #1F497D; }
+    .stTabs [aria-selected="true"] { background-color: #1F497D !important; color: white !important; }
     </style>
     """, unsafe_allow_html=True)
 
 # =========================================================================
-# --- MOTOR DE CARGA MULTI-PESTAÑA (EXCEL) ---
+# --- MOTOR DE DATOS INTELIGENTE ---
 # =========================================================================
 @st.cache_data(ttl=600)
-def load_all_data():
+def load_business_data():
     URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSV6dtosg0Ydt0o3NMFezC--NjHfEW82onFeY2JR4PTYD3ylG4ZlRaQBquscFrCy_Lysrau9zTW6dkn/pub?output=xlsx"
-    
     try:
         response = requests.get(URL, timeout=30)
-        response.raise_for_status()
         xls = pd.ExcelFile(BytesIO(response.content), engine='openpyxl')
-        
         data_rows = []
         tiendas_objetivo = ['Vallejo', 'Arco Norte', 'Puebla Sur', 'Miravalle', 'Ecatepec']
-        
-        # Diccionario para mapear meses dinámicamente
-        meses_dict = {
-            'enero': 'Enero', 'febrero': 'Febrero', 'marzo': 'Marzo', 'abril': 'Abril',
-            'mayo': 'Mayo', 'junio': 'Junio', 'julio': 'Julio', 'agosto': 'Agosto',
-            'septiembre': 'Septiembre', 'octubre': 'Octubre', 'noviembre': 'Noviembre', 'diciembre': 'Diciembre'
-        }
+        meses_dict = {'enero':'Enero', 'febrero':'Febrero', 'marzo':'Marzo', 'abril':'Abril', 'mayo':'Mayo', 'junio':'Junio', 'julio':'Julio', 'agosto':'Agosto', 'septiembre':'Septiembre', 'octubre':'Octubre', 'noviembre':'Noviembre', 'diciembre':'Diciembre'}
 
         for sheet_name in xls.sheet_names:
             if not sheet_name.lower().strip().startswith('sem'): continue
             df_raw = pd.read_excel(xls, sheet_name=sheet_name, header=None, engine='openpyxl')
-            current_date = "Sin Fecha"
-            
+            curr_date = "Sin Fecha"
             for i, row in df_raw.iterrows():
                 if len(row) < 2: continue
                 val = str(row[1]).strip()
-                if '2026' in val and ',' in val:
-                    current_date = val
-                    continue
+                if '2026' in val and ',' in val: curr_date = val; continue
                 if any(t.lower() in val.lower() for t in tiendas_objetivo) and len(val) < 30:
                     try:
-                        # Extraer mes real de la cadena de fecha
-                        mes_encontrado = "Otros"
-                        for key, name in meses_dict.items():
-                            if key in current_date.lower():
-                                mes_encontrado = name
-                                break
-                                
+                        mes_ext = "Otros"
+                        for k, v in meses_dict.items():
+                            if k in curr_date.lower(): mes_ext = v; break
                         data_rows.append({
-                            'Mes': mes_encontrado,
-                            'Semana': sheet_name.strip(),
-                            'Tienda': val,
-                            'Sis_Aduana': row[2], 'Muertos': row[4], 'Cajas': row[5],
-                            'Meta_Rec': row[7], 'Real_Rec': row[8],
-                            'Habilitadas': row[10], 'Ubicadas': row[11]
+                            'Mes': mes_ext, 'Semana': sheet_name.strip(), 'Tienda': val,
+                            'Ing_Sis': row[2], 'Ing_Muertos': row[4], 'Ing_Cajas': row[5],
+                            'Meta_Rec': row[7], 'Real_Rec': row[8], 'Pzas_Rec': row[9],
+                            'Pzas_Hab': row[10], 'Pzas_Ubi': row[11]
                         })
-                    except Exception: continue
-
-        if not data_rows: return pd.DataFrame()
+                    except: continue
         df = pd.DataFrame(data_rows)
-        def clean_num(x):
-            try: return float(str(x).replace(',', '').replace('%', '').strip())
-            except: return 0.0
-        for col in ['Sis_Aduana', 'Muertos', 'Cajas', 'Meta_Rec', 'Real_Rec', 'Habilitadas', 'Ubicadas']:
-            df[col] = df[col].apply(clean_num)
-        df['Total_Ingresos'] = df['Sis_Aduana'] + df['Muertos'] + df['Cajas']
+        for col in ['Ing_Sis', 'Ing_Muertos', 'Ing_Cajas', 'Meta_Rec', 'Real_Rec', 'Pzas_Rec', 'Pzas_Hab', 'Pzas_Ubi']:
+            df[col] = df[col].apply(lambda x: float(str(x).replace(',', '').replace('%', '').strip()) if pd.notna(x) else 0.0)
+        df['Total_Ingresos'] = df['Ing_Sis'] + df['Ing_Muertos'] + df['Ing_Cajas']
         return df
-    except Exception as e:
-        st.error(f"Error al cargar datos: {e}")
-        return pd.DataFrame()
+    except: return pd.DataFrame()
 
-# =========================================================================
-# --- LÓGICA DE INTERFAZ ---
-# =========================================================================
-df = load_all_data()
+df = load_business_data()
 
-st.markdown('<p class="main-title">👚 PRICE SHOES • Operaciones Ropa</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-title">DASHBOARD ANUAL DINÁMICO</p>', unsafe_allow_html=True)
+# --- HEADER EJECUTIVO ---
+col_logo, col_text = st.columns([1, 6])
+with col_text:
+    st.markdown('<p class="main-title">PRICE SHOES • Business Intelligence</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-title">CONTROL OPERATIVO DE RECUPERACIÓN (CAMBIOS Y MUERTOS)</p>', unsafe_allow_html=True)
 
 if not df.empty:
-    # --- FILTROS DE REPORTE (SIDEBAR) ---
-    st.sidebar.markdown("### 🔍 Filtros de Reporte")
+    # --- FILTROS GLOBALES (SIDEBAR) ---
+    st.sidebar.image("https://priceshoes.com/media/logo/stores/1/logo_price_shoes.png", width=150)
+    st.sidebar.markdown("### 🎛️ Filtros de Control")
     
-    # Orden cronológico de meses
     meses_orden = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
     meses_presentes = sorted(df['Mes'].unique().tolist(), key=lambda x: meses_orden.index(x) if x in meses_orden else 99)
-    sel_mes = st.sidebar.selectbox("Mes:", ["Todos"] + meses_presentes)
+    sel_mes = st.sidebar.selectbox("Periodo Mensual:", ["Anual"] + meses_presentes)
     
-    # Filtrar por mes para actualizar semanas
-    df_mes = df if sel_mes == "Todos" else df[df['Mes'] == sel_mes]
+    df_mes = df if sel_mes == "Anual" else df[df['Mes'] == sel_mes]
+    semanas = ["Todas las Semanas"] + sorted(df_mes['Semana'].unique().tolist(), key=lambda x: int(''.join(filter(str.isdigit, x)) or 0))
+    sel_sem = st.sidebar.selectbox("Corte Semanal:", semanas)
     
-    # Filtro Semana
-    semanas_presentes = sorted(df_mes['Semana'].unique().tolist(), key=lambda x: int(''.join(filter(str.isdigit, x)) or 0))
-    sel_sem = st.sidebar.selectbox("Semana:", ["Todas"] + semanas_presentes)
-    
-    # Filtro Tienda
-    tiendas_presentes = sorted(df['Tienda'].unique().tolist())
-    sel_tienda = st.sidebar.selectbox("Tienda:", ["Todas"] + tiendas_presentes)
+    tiendas = ["Consolidado Total"] + sorted(df['Tienda'].unique().tolist())
+    sel_tienda = st.sidebar.selectbox("Unidad de Negocio:", tiendas)
 
-    # Aplicar filtros al DataFrame principal para las tarjetas
-    df_filtered = df_mes.copy()
-    if sel_sem != "Todas": df_filtered = df_filtered[df_filtered['Semana'] == sel_sem]
-    if sel_tienda != "Todas": df_filtered = df_filtered[df_filtered['Tienda'] == sel_tienda]
+    # Filtrado Final
+    df_f = df_mes.copy()
+    if sel_sem != "Todas las Semanas": df_f = df_f[df_f['Semana'] == sel_sem]
+    if sel_tienda != "Consolidado Total": df_f = df_f[df_f['Tienda'] == sel_tienda]
 
-    # --- RESUMEN MACRO DINÁMICO (ÚLTIMAS 4 SEMANAS DEL FILTRO) ---
-    st.markdown('<p class="graph-title">📊 Resumen Macro de Operación (Dinámico)</p>', unsafe_allow_html=True)
-    
-    # Obtener las semanas según el filtro actual
-    semanas_filtro = sorted(df_filtered['Semana'].unique().tolist(), key=lambda x: int(''.join(filter(str.isdigit, x)) or 0))
-    
-    # Si hay muchas semanas, mostramos las últimas 4 del filtro. Si hay pocas, mostramos las que haya.
-    semanas_a_mostrar = semanas_filtro[-4:] if len(semanas_filtro) > 4 else semanas_filtro
-    
-    if semanas_a_mostrar:
-        cols_macro = st.columns(len(semanas_a_mostrar))
-        for i, sem in enumerate(semanas_a_mostrar):
-            df_sem = df_filtered[df_filtered['Semana'] == sem]
-            ing = df_sem['Total_Ingresos'].sum()
-            hab = df_sem['Habilitadas'].sum()
-            ubi = df_sem['Ubicadas'].sum()
-            met = df_sem['Meta_Rec'].sum()
-            rea = df_sem['Real_Rec'].sum()
+    # --- NAVEGACIÓN POR PESTAÑAS ---
+    tab1, tab2, tab3 = st.tabs(["📊 RESUMEN EJECUTIVO", "🚀 PRODUCTIVIDAD Y RENDIMIENTO", "📑 AUDITORÍA DE DATOS"])
+
+    # =========================================================================
+    # TAB 1: RESUMEN EJECUTIVO
+    # =========================================================================
+    with tab1:
+        st.markdown('<p class="section-header">Indicadores Clave de Desempeño (KPIs)</p>', unsafe_allow_html=True)
+        c1, c2, c3, c4 = st.columns(4)
+        ing = df_f['Total_Ingresos'].sum()
+        hab = df_f['Pzas_Hab'].sum()
+        ubi = df_f['Pzas_Ubi'].sum()
+        eff_rec = (df_f['Real_Rec'].sum() / df_f['Meta_Rec'].sum() * 100) if df_f['Meta_Rec'].sum() > 0 else 0
+        
+        with c1: st.markdown(f'<div class="exec-card"><p class="exec-label">📥 Ingreso Total</p><p class="exec-value">{ing:,.0f}</p><p class="exec-delta">Piezas Recuperadas</p></div>', unsafe_allow_html=True)
+        with c2: st.markdown(f'<div class="exec-card"><p class="exec-label">✨ Tasa Habilitado</p><p class="exec-value">{(hab/ing*100 if ing>0 else 0):.1f}%</p><p class="exec-delta">{hab:,.0f} Pzas Listas</p></div>', unsafe_allow_html=True)
+        with c3: st.markdown(f'<div class="exec-card"><p class="exec-label">📍 Tasa Ubicación</p><p class="exec-value">{(ubi/ing*100 if ing>0 else 0):.1f}%</p><p class="exec-delta">{ubi:,.0f} en Piso</p></div>', unsafe_allow_html=True)
+        with c4: st.markdown(f'<div class="exec-card"><p class="exec-label">🎯 Efic. Recorridos</p><p class="exec-value">{eff_rec:.1f}%</p><p class="exec-delta">Cumplimiento Meta</p></div>', unsafe_allow_html=True)
+
+        col_g1, col_g2 = st.columns(2)
+        with col_g1:
+            st.markdown('<p class="section-header">Distribución de Ingresos por Tienda</p>', unsafe_allow_html=True)
+            df_pie = df_f.groupby('Tienda')['Total_Ingresos'].sum().reset_index()
+            fig_pie = go.Figure(data=[go.Pie(labels=df_pie['Tienda'], values=df_pie['Total_Ingresos'], hole=.4, marker_colors=['#1F497D', '#E6007E', '#D9D9D9', '#555555', '#A6A6A6'])])
+            fig_pie.update_layout(showlegend=True, height=400, margin=dict(t=0, b=0, l=0, r=0))
+            st.plotly_chart(fig_pie, use_container_width=True, config={'displayModeBar': False, 'staticPlot': True})
             
-            pct_hab = (hab/ing*100) if ing > 0 else 0
-            pct_ubi = (ubi/ing*100) if ing > 0 else 0
-            pct_rec = (rea/met*100) if met > 0 else 0
+        with col_g2:
+            st.markdown('<p class="section-header">Balance Operativo: Ingreso vs Salida a Piso</p>', unsafe_allow_html=True)
+            df_bar = df_f.groupby('Tienda').agg({'Total_Ingresos':'sum', 'Pzas_Ubi':'sum'}).reset_index().sort_values('Total_Ingresos', ascending=False)
+            fig_bar = go.Figure()
+            fig_bar.add_trace(go.Bar(x=df_bar['Tienda'], y=df_bar['Total_Ingresos'], name="Ingreso", marker_color='#1F497D'))
+            fig_bar.add_trace(go.Bar(x=df_bar['Tienda'], y=df_bar['Pzas_Ubi'], name="Ubicado", marker_color='#E6007E'))
+            fig_bar.update_layout(barmode='group', plot_bgcolor='white', height=400, margin=dict(t=0, b=0))
+            st.plotly_chart(fig_bar, use_container_width=True, config={'displayModeBar': False, 'staticPlot': True})
+
+    # =========================================================================
+    # TAB 2: PRODUCTIVIDAD
+    # =========================================================================
+    with tab2:
+        st.markdown('<p class="section-header">Métricas de Productividad por Unidad</p>', unsafe_allow_html=True)
+        df_prod = df_f.groupby('Tienda').agg({
+            'Total_Ingresos': 'sum', 'Pzas_Rec': 'sum', 'Real_Rec': 'sum', 'Pzas_Hab': 'sum'
+        }).reset_index()
+        
+        df_prod['Pzas x Recorrido'] = (df_prod['Pzas_Rec'] / df_prod['Real_Rec']).fillna(0)
+        df_prod['Productividad Habilitado'] = (df_prod['Pzas_Hab'] / df_prod['Total_Ingresos'] * 100).fillna(0)
+        
+        c_p1, c_p2 = st.columns(2)
+        with c_p1:
+            st.markdown('<p class="graph-title">Densidad de Recolección (Piezas por Recorrido)</p>', unsafe_allow_html=True)
+            fig_p1 = go.Figure(go.Bar(x=df_prod['Tienda'], y=df_prod['Pzas x Recorrido'], marker_color='#1F497D', text=df_prod['Pzas x Recorrido'].round(1), textposition='auto'))
+            fig_p1.update_layout(plot_bgcolor='white', height=400)
+            st.plotly_chart(fig_p1, use_container_width=True, config={'staticPlot': True})
             
-            with cols_macro[i]:
-                st.markdown(f'<div class="macro-card-header">{sem}</div>', unsafe_allow_html=True)
-                st.markdown(f"""
-                    <div class="macro-card-body">
-                        <p class="macro-label">📥 Ingresos</p><p class="macro-value">{ing:,.0f}</p>
-                        <div class="macro-divider"></div>
-                        <p class="macro-label">✨ Habilitado</p><p class="macro-value">{hab:,.0f} <span class="macro-pct">({pct_hab:.1f}%)</span></p>
-                        <div class="macro-divider"></div>
-                        <p class="macro-label">📍 Ubicado</p><p class="macro-value">{ubi:,.0f} <span class="macro-pct">({pct_ubi:.1f}%)</span></p>
-                        <div class="macro-divider"></div>
-                        <p class="macro-label">🎯 % Recorridos</p><p class="macro-value">{pct_rec:.1f}%</p>
-                    </div>
-                """, unsafe_allow_html=True)
-    else:
-        st.info("No hay datos suficientes para mostrar el resumen macro con los filtros actuales.")
+        with c_p2:
+            st.markdown('<p class="graph-title">Evolución de Productividad Semanal</p>', unsafe_allow_html=True)
+            df_ev = df_f.groupby('Semana').agg({'Total_Ingresos':'sum', 'Pzas_Hab':'sum'}).reset_index()
+            df_ev['n'] = df_ev['Semana'].apply(lambda x: int(''.join(filter(str.isdigit, x)) or 0))
+            df_ev = df_ev.sort_values('n')
+            fig_ev = go.Figure()
+            fig_ev.add_trace(go.Scatter(x=df_ev['Semana'], y=df_ev['Total_Ingresos'], name="Ingresos", line=dict(color='#1F497D', width=4)))
+            fig_ev.add_trace(go.Scatter(x=df_ev['Semana'], y=df_ev['Pzas_Hab'], name="Habilitado", line=dict(color='#E6007E', width=4)))
+            fig_ev.update_layout(plot_bgcolor='white', height=400)
+            st.plotly_chart(fig_ev, use_container_width=True, config={'staticPlot': True})
 
-    # --- GRÁFICOS ---
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown('<p class="graph-title">Ingresos vs Habilitado por Tienda</p>', unsafe_allow_html=True)
-        df_g = df_filtered.groupby('Tienda').agg({'Total_Ingresos':'sum', 'Habilitadas':'sum'}).reset_index().sort_values('Total_Ingresos', ascending=False)
-        fig = go.Figure()
-        fig.add_trace(go.Bar(x=df_g['Tienda'], y=df_g['Total_Ingresos'], name="Ingresos", marker_color='#1F497D'))
-        fig.add_trace(go.Bar(x=df_g['Tienda'], y=df_g['Habilitadas'], name="Habilitado", marker_color='#E6007E'))
-        fig.update_layout(barmode='group', plot_bgcolor='white', height=350, margin=dict(t=10, b=10))
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with c2:
-        st.markdown('<p class="graph-title">Cumplimiento de Recorridos (%)</p>', unsafe_allow_html=True)
-        df_r = df_filtered.groupby('Tienda').agg({'Real_Rec':'sum', 'Meta_Rec':'sum'}).reset_index()
-        df_r['% Recorridos'] = (df_r['Real_Rec'] / df_r['Meta_Rec'] * 100).fillna(0)
-        fig2 = go.Figure(go.Bar(x=df_r['Tienda'], y=df_r['% Recorridos'], marker_color='#1F497D', text=df_r['% Recorridos'].map('{:.1f}%'.format), textposition='auto'))
-        fig2.update_layout(plot_bgcolor='white', height=350, margin=dict(t=10, b=10))
-        st.plotly_chart(fig2, use_container_width=True)
-
-    # --- MATRIZ DETALLADA (AGRUPADA POR SEMANA) ---
-    st.markdown('<p class="graph-title">🔍 Matriz de Auditoría Detallada (Agrupada por Semana)</p>', unsafe_allow_html=True)
-    df_matrix = df_filtered.groupby(['Semana', 'Tienda']).agg({
-        'Total_Ingresos': 'sum',
-        'Habilitadas': 'sum',
-        'Ubicadas': 'sum',
-        'Real_Rec': 'sum',
-        'Meta_Rec': 'sum'
-    }).reset_index()
-    
-    # Calcular porcentajes para la tabla
-    df_matrix['% Habilitado'] = (df_matrix['Habilitadas'] / df_matrix['Total_Ingresos'] * 100).fillna(0).map('{:.1f}%'.format)
-    df_matrix['% Ubicado'] = (df_matrix['Ubicadas'] / df_matrix['Total_Ingresos'] * 100).fillna(0).map('{:.1f}%'.format)
-    df_matrix['% Recorridos'] = (df_matrix['Real_Rec'] / df_matrix['Meta_Rec'] * 100).fillna(0).map('{:.1f}%'.format)
-    
-    st.dataframe(df_matrix[['Semana', 'Tienda', 'Total_Ingresos', 'Habilitadas', '% Habilitado', 'Ubicadas', '% Ubicado', '% Recorridos']], use_container_width=True)
+    # =========================================================================
+    # TAB 3: AUDITORÍA
+    # =========================================================================
+    with tab3:
+        st.markdown('<p class="section-header">Matriz Consolidada de Auditoría</p>', unsafe_allow_html=True)
+        df_audit = df_f.groupby(['Semana', 'Tienda']).agg({
+            'Ing_Sis': 'sum', 'Ing_Muertos': 'sum', 'Ing_Cajas': 'sum', 'Total_Ingresos': 'sum',
+            'Pzas_Rec': 'sum', 'Pzas_Hab': 'sum', 'Pzas_Ubi': 'sum', 'Real_Rec': 'sum'
+        }).reset_index()
+        
+        # Formateo de porcentajes
+        df_audit['% Hab'] = (df_audit['Pzas_Hab'] / df_audit['Total_Ingresos'] * 100).fillna(0).round(1).astype(str) + '%'
+        df_audit['% Ubi'] = (df_audit['Pzas_Ubi'] / df_audit['Total_Ingresos'] * 100).fillna(0).round(1).astype(str) + '%'
+        
+        st.dataframe(df_audit.sort_values(['Semana', 'Total_Ingresos'], ascending=[True, False]), use_container_width=True)
+        
+        st.download_button(label="📥 Descargar Reporte en CSV", data=df_audit.to_csv(index=False).encode('utf-8'), file_name='reporte_operativo_price.csv', mime='text/csv')
 
 else:
-    st.info("No se detectaron datos. Por favor, asegúrate de publicar el Google Sheet como Excel (.xlsx) y seleccionar 'Todo el documento'.")
+    st.info("📊 El sistema está listo. Por favor, asegúrate de que el Google Sheet esté publicado correctamente.")
