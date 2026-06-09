@@ -30,17 +30,18 @@ st.markdown("""
     .kpi-master-label { color: #666; font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 8px; }
     .kpi-master-value { color: #1F497D; font-size: 28px; font-weight: 900; }
     .note-box { background-color: #FFFFFF; border-left: 5px solid #E6007E; padding: 12px 15px; border-radius: 8px; margin-bottom: 15px; color: #333; font-size: 13px; }
+    
+    /* Store Row */
+    .store-row { background-color: #f1f3f6; padding: 8px; border-radius: 8px; margin-top: 20px; margin-bottom: 10px; font-weight: bold; color: #1F497D; border-left: 5px solid #1F497D; }
     </style>
     """, unsafe_allow_html=True)
 
 
 def safe_div(num, den):
-    """Divide con seguridad para evitar inf, NaN o división entre cero."""
     return (num / den) if den and den > 0 else 0
 
 
 def to_number(series):
-    """Convierte columnas con posibles símbolos de moneda, comas o espacios a número."""
     return pd.to_numeric(
         series.astype(str)
         .str.replace('$', '', regex=False)
@@ -51,9 +52,7 @@ def to_number(series):
 
 
 def detect_column(df, candidates, exclude=None):
-    """Detecta una columna por coincidencias flexibles de nombre."""
-    if df.empty:
-        return None
+    if df.empty: return None
     exclude = exclude or []
     cols = [str(c).strip() for c in df.columns]
     lower_map = {c: c.lower().replace('_', ' ').replace('-', ' ') for c in cols}
@@ -63,7 +62,6 @@ def detect_column(df, candidates, exclude=None):
         for col, col_l in lower_map.items():
             if candidate_l == col_l and not any(x.lower() in col_l for x in exclude):
                 return col
-
     for candidate in candidates:
         candidate_l = candidate.lower()
         for col, col_l in lower_map.items():
@@ -73,7 +71,6 @@ def detect_column(df, candidates, exclude=None):
 
 
 def build_model_column_map(df_models):
-    """Mapa robusto de columnas para que el Top 30 no dependa de nombres exactos."""
     return {
         'id': detect_column(df_models, ['id', 'sku', 'codigo', 'código']),
         'modelo': detect_column(df_models, ['modelo', 'model']),
@@ -91,11 +88,9 @@ def build_model_column_map(df_models):
 def load_all_intelligence_data():
     URL_XLSX = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSV6dtosg0Ydt0o3NMFezC--NjHfEW82onFeY2JR4PTYD3ylG4ZlRaQBquscFrCy_Lysrau9zTW6dkn/pub?output=xlsx"
     URL_CSV = "https://drive.google.com/uc?export=download&id=15UBabZ8g_VbDMZiPfR2iuW-U9YuNgHWP"
-
     meses_dict = {1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril', 5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto', 9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'}
 
     try:
-        # 1. Cargar Datos Operativos y Modelos (XLSX)
         resp_x = requests.get(URL_XLSX, timeout=30)
         resp_x.raise_for_status()
         xls = pd.ExcelFile(BytesIO(resp_x.content), engine='openpyxl')
@@ -104,30 +99,32 @@ def load_all_intelligence_data():
         model_frames = []
 
         for sheet in xls.sheet_names:
+            # Detección de datos operativos (WoW)
             if 'sem' in sheet.lower():
                 raw = pd.read_excel(xls, sheet_name=sheet, header=None, engine='openpyxl')
                 h_rows = raw[raw[1] == 'Tienda'].index.tolist()
                 for h_idx in h_rows:
                     fecha = raw.iloc[h_idx - 1, 1]
-                    if not isinstance(fecha, datetime):
-                        continue
+                    if not isinstance(fecha, datetime): continue
                     d_idx = h_idx + 1
                     while d_idx < len(raw) and pd.notna(raw.iloc[d_idx, 1]):
                         r = raw.iloc[d_idx, 1:15].tolist()
                         all_op.append({
-                            'Tienda': r[0],
-                            'Total_Ing': r[5],
-                            'Meta_Rec': r[6],
-                            'Real_Rec': r[7],
-                            'Pzas_Hab': r[9],
-                            'Pzas_Ubi': r[10],
-                            'Fecha': fecha,
-                            'Semana': sheet
+                            'Tienda': r[0], 'Total_Ing': r[5], 'Meta_Rec': r[6], 'Real_Rec': r[7],
+                            'Pzas_Hab': r[9], 'Pzas_Ubi': r[10], 'Fecha': fecha, 'Semana': sheet
                         })
                         d_idx += 1
 
-            # Se acumulan todas las hojas de venta/devolución; antes se sobrescribía la última hoja.
-            if 'venta' in sheet.lower() or 'devolucion' in sheet.lower() or 'devolución' in sheet.lower():
+            # Detección de datos de modelos (Venta/Devolución)
+            # Mejoramos la detección buscando palabras clave en el nombre de la hoja O en el contenido
+            is_model_sheet = any(kw in sheet.lower() for kw in ['venta', 'devolucion', 'devolución'])
+            if not is_model_sheet:
+                # Si el nombre no ayuda, revisamos las primeras filas
+                sample = pd.read_excel(xls, sheet_name=sheet, nrows=5, header=None).astype(str).values.flatten()
+                if any('modelo' in str(v).lower() or 'devolucion' in str(v).lower() for v in sample):
+                    is_model_sheet = True
+            
+            if is_model_sheet:
                 tmp = pd.read_excel(xls, sheet_name=sheet, engine='openpyxl')
                 tmp.columns = [str(c).strip() for c in tmp.columns]
                 tmp['Hoja_Origen'] = sheet
@@ -143,7 +140,6 @@ def load_all_intelligence_data():
             df_op['Fecha'] = pd.to_datetime(df_op['Fecha'], errors='coerce')
             df_op['Mes'] = df_op['Fecha'].dt.month.map(meses_dict)
 
-        # 2. Cargar Base Maestra (CSV)
         resp_c = requests.get(URL_CSV, timeout=30)
         resp_c.raise_for_status()
         df_m = pd.read_csv(BytesIO(resp_c.content), encoding='latin1', low_memory=False)
@@ -159,39 +155,20 @@ def load_all_intelligence_data():
 
 
 def add_recovery_columns(df, m_cols):
-    """Calcula recuperación con tope: ventas recuperadas nunca pueden ser mayores a devoluciones."""
     df = df.copy()
-    d_col = m_cols.get('devolucion')
-    v_col = m_cols.get('venta')
-    vn_col = m_cols.get('venta_neta')
-
+    d_col, v_col, vn_col = m_cols.get('devolucion'), m_cols.get('venta'), m_cols.get('venta_neta')
     df['Devolucion_Pzas'] = to_number(df[d_col]) if d_col in df.columns else 0
     df['Venta_Pzas'] = to_number(df[v_col]) if v_col in df.columns else 0
     df['Venta_Neta_$'] = to_number(df[vn_col]) if vn_col in df.columns else 0
-
     return df
 
 
 def summarize_recovery(df, group_cols):
-    """Agrupa y aplica la regla de negocio: recuperación = min(venta pzas, devolución pzas)."""
-    if df.empty:
-        return pd.DataFrame()
-
-    grouped = df.groupby(group_cols, dropna=False).agg({
-        'Devolucion_Pzas': 'sum',
-        'Venta_Pzas': 'sum',
-        'Venta_Neta_$': 'sum'
-    }).reset_index()
-
+    if df.empty: return pd.DataFrame()
+    grouped = df.groupby(group_cols, dropna=False).agg({'Devolucion_Pzas': 'sum', 'Venta_Pzas': 'sum', 'Venta_Neta_$': 'sum'}).reset_index()
     grouped['Pzas_Recuperadas'] = grouped[['Devolucion_Pzas', 'Venta_Pzas']].min(axis=1)
-    grouped['Venta_Neta_Recuperada_$'] = grouped.apply(
-        lambda r: r['Venta_Neta_$'] * safe_div(r['Pzas_Recuperadas'], r['Venta_Pzas']) if r['Venta_Pzas'] > 0 else 0,
-        axis=1
-    )
-    grouped['% Recuperacion Dev vs Venta'] = grouped.apply(
-        lambda r: safe_div(r['Pzas_Recuperadas'], r['Devolucion_Pzas']) * 100,
-        axis=1
-    )
+    grouped['Venta_Neta_Recuperada_$'] = grouped.apply(lambda r: r['Venta_Neta_$'] * safe_div(r['Pzas_Recuperadas'], r['Venta_Pzas']) if r['Venta_Pzas'] > 0 else 0, axis=1)
+    grouped['% Recuperacion Dev vs Venta'] = grouped.apply(lambda r: safe_div(r['Pzas_Recuperadas'], r['Devolucion_Pzas']) * 100, axis=1)
     grouped['Pzas_No_Recuperadas'] = (grouped['Devolucion_Pzas'] - grouped['Pzas_Recuperadas']).clip(lower=0)
     return grouped
 
@@ -200,21 +177,16 @@ df_op, df_models, m_cols, df_m = load_all_intelligence_data()
 
 if not df_op.empty:
     st.sidebar.image("https://priceshoes.com/media/logo/stores/1/logo_price_shoes.png", width=160)
-
-    # --- FILTROS ---
     st.sidebar.markdown("### Filtros")
     sel_tiendas = st.sidebar.multiselect("Tiendas:", sorted(df_op['Tienda'].dropna().unique().tolist()), default=df_op['Tienda'].dropna().unique().tolist())
     sel_meses = st.sidebar.multiselect("Meses:", ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'], default=df_op['Mes'].dropna().unique().tolist())
-
     act_list = sorted([str(x) for x in df_m['Actividad'].dropna().unique()]) if not df_m.empty and 'Actividad' in df_m.columns else []
     sel_act = st.sidebar.multiselect("Actividades:", act_list, default=act_list)
 
-    # Aplicación de filtros
     df_f = df_op[(df_op['Tienda'].isin(sel_tiendas)) & (df_op['Mes'].isin(sel_meses))]
     if not df_m.empty and {'Tienda', 'Mes', 'Actividad'}.issubset(df_m.columns):
         df_m_f = df_m[(df_m['Tienda'].isin(sel_tiendas)) & (df_m['Mes'].isin(sel_meses)) & (df_m['Actividad'].astype(str).isin(sel_act))]
-    else:
-        df_m_f = pd.DataFrame()
+    else: df_m_f = pd.DataFrame()
 
     st.markdown('<p class="main-title">PRICE SHOES • Operational Intelligence Center</p>', unsafe_allow_html=True)
     st.markdown('<p class="sub-title">CENTRO DE MANDO EJECUTIVO, PRODUCTIVIDAD Y PRODUCTO</p>', unsafe_allow_html=True)
@@ -226,154 +198,84 @@ if not df_op.empty:
     cols_w = st.columns(4)
     for i, sem in enumerate(w_show):
         df_c = df_op[df_op['Semana'] == sem]
-        if sel_tiendas:
-            df_c = df_c[df_c['Tienda'].isin(sel_tiendas)]
-        ing = df_c['Total_Ing'].sum()
-        hab = df_c['Pzas_Hab'].sum()
-        ubi = df_c['Pzas_Ubi'].sum()
-        rec_m = df_c['Meta_Rec'].sum()
-        rec_r = df_c['Real_Rec'].sum()
-        pct_hab = safe_div(hab, ing) * 100
-        pct_ubi = safe_div(ubi, ing) * 100
-        pct_rec = safe_div(rec_r, rec_m) * 100
-
+        if sel_tiendas: df_c = df_c[df_c['Tienda'].isin(sel_tiendas)]
+        ing, hab, ubi, rec_m, rec_r = df_c['Total_Ing'].sum(), df_c['Pzas_Hab'].sum(), df_c['Pzas_Ubi'].sum(), df_c['Meta_Rec'].sum(), df_c['Real_Rec'].sum()
         with cols_w[i]:
             st.markdown(f'<div class="wow-card-header">{sem}</div>', unsafe_allow_html=True)
-            st.markdown(
-                f'''
-                <div class="wow-card-body">
-                    <div class="wow-metric-row"><span class="wow-label">Ingreso</span><span class="wow-value">{ing:,.0f}</span></div>
-                    <div class="wow-metric-row"><span class="wow-label">Hab.</span><span class="wow-value">{hab:,.0f}</span></div>
-                    <div class="wow-metric-row"><span class="wow-label">% Hab/Ing</span><span class="wow-value-pct">{pct_hab:.1f}%</span></div>
-                    <div class="wow-metric-row"><span class="wow-label">Ubi.</span><span class="wow-value">{ubi:,.0f}</span></div>
-                    <div class="wow-metric-row"><span class="wow-label">% Ubi/Ing</span><span class="wow-value-pct">{pct_ubi:.1f}%</span></div>
-                    <div class="wow-metric-row"><span class="wow-label">Recorridos</span><span class="wow-value">{rec_r:,.0f}/{rec_m:,.0f}</span></div>
-                    <div class="wow-metric-row"><span class="wow-label">% Rec vs Meta</span><span class="wow-value-pct">{pct_rec:.1f}%</span></div>
-                </div>
-                ''',
-                unsafe_allow_html=True
-            )
+            st.markdown(f'''<div class="wow-card-body">
+                <div class="wow-metric-row"><span class="wow-label">Ingreso</span><span class="wow-value">{ing:,.0f}</span></div>
+                <div class="wow-metric-row"><span class="wow-label">Hab.</span><span class="wow-value">{hab:,.0f}</span></div>
+                <div class="wow-metric-row"><span class="wow-label">% Hab/Ing</span><span class="wow-value-pct">{safe_div(hab,ing)*100:.1f}%</span></div>
+                <div class="wow-metric-row"><span class="wow-label">Ubi.</span><span class="wow-value">{ubi:,.0f}</span></div>
+                <div class="wow-metric-row"><span class="wow-label">% Ubi/Ing</span><span class="wow-value-pct">{safe_div(ubi,ing)*100:.1f}%</span></div>
+                <div class="wow-metric-row"><span class="wow-label">Recorridos</span><span class="wow-value">{rec_r:,.0f}/{rec_m:,.0f}</span></div>
+                <div class="wow-metric-row"><span class="wow-label">% Rec vs Meta</span><span class="wow-value-pct">{safe_div(rec_r,rec_m)*100:.1f}%</span></div>
+            </div>''', unsafe_allow_html=True)
 
     # --- TABS ---
     t_exec, t_prod, t_model, t_conv, t_audit = st.tabs(["SCORECARD", "COLABORADORES", "TOP 30 MODELOS", "CONVERSIÓN SEMANAL", "AUDITORÍA"])
 
     with t_exec:
-        ing_t = df_f['Total_Ing'].sum()
-        hab_t = df_f['Pzas_Hab'].sum()
-        ubi_t = df_f['Pzas_Ubi'].sum()
-        rec_m = df_f['Meta_Rec'].sum()
-        rec_r = df_f['Real_Rec'].sum()
+        st.markdown("### Consolidado Global")
+        ing_t, hab_t, ubi_t, rec_m, rec_r = df_f['Total_Ing'].sum(), df_f['Pzas_Hab'].sum(), df_f['Pzas_Ubi'].sum(), df_f['Meta_Rec'].sum(), df_f['Real_Rec'].sum()
         c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">Ingresos</p><p class="kpi-master-value">{ing_t:,.0f}</p></div>', unsafe_allow_html=True)
-        with c2:
-            st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">Habilitado / Ingreso</p><p class="kpi-master-value">{safe_div(hab_t, ing_t) * 100:.1f}%</p></div>', unsafe_allow_html=True)
-        with c3:
-            st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">Ubicado / Ingreso</p><p class="kpi-master-value">{safe_div(ubi_t, ing_t) * 100:.1f}%</p></div>', unsafe_allow_html=True)
-        with c4:
-            st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">Recorridos vs Meta</p><p class="kpi-master-value">{safe_div(rec_r, rec_m) * 100:.1f}%</p></div>', unsafe_allow_html=True)
-        st.plotly_chart(px.funnel(x=[ing_t, hab_t, ubi_t], y=["Ingreso", "Habilitado", "Ubicado"], color_discrete_sequence=['#1F497D']), use_container_width=True, config={'staticPlot': True})
+        with c1: st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">Ingresos</p><p class="kpi-master-value">{ing_t:,.0f}</p></div>', unsafe_allow_html=True)
+        with c2: st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">Habilitado / Ingreso</p><p class="kpi-master-value">{safe_div(hab_t, ing_t) * 100:.1f}%</p></div>', unsafe_allow_html=True)
+        with c3: st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">Ubicado / Ingreso</p><p class="kpi-master-value">{safe_div(ubi_t, ing_t) * 100:.1f}%</p></div>', unsafe_allow_html=True)
+        with c4: st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">Recorridos vs Meta</p><p class="kpi-master-value">{safe_div(rec_r, rec_m) * 100:.1f}%</p></div>', unsafe_allow_html=True)
+        
+        st.markdown("### Desglose por Tienda")
+        for tienda in sorted(df_f['Tienda'].unique()):
+            df_t = df_f[df_f['Tienda'] == tienda]
+            ing_s, hab_s, ubi_s, rec_ms, rec_rs = df_t['Total_Ing'].sum(), df_t['Pzas_Hab'].sum(), df_t['Pzas_Ubi'].sum(), df_t['Meta_Rec'].sum(), df_t['Real_Rec'].sum()
+            st.markdown(f'<div class="store-row">📍 {tienda}</div>', unsafe_allow_html=True)
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Ingresos", f"{ing_s:,.0f}")
+            k2.metric("Hab / Ing", f"{safe_div(hab_s, ing_s)*100:.1f}%")
+            k3.metric("Ubi / Ing", f"{safe_div(ubi_s, ing_s)*100:.1f}%")
+            k4.metric("Rec vs Meta", f"{safe_div(rec_rs, rec_ms)*100:.1f}%")
 
     with t_prod:
         st.markdown("### Ranking de Productividad por Colaborador")
-        if not df_m_f.empty and {'Nombre', 'Tienda', 'Pzas'}.issubset(df_m_f.columns):
+        if not df_m_f.empty:
             df_m_f['Pzas'] = to_number(df_m_f['Pzas'])
             df_user = df_m_f.groupby(['Nombre', 'Tienda']).agg({'Pzas': 'sum'}).reset_index().sort_values('Pzas', ascending=False)
             st.plotly_chart(px.bar(df_user.head(20), x='Nombre', y='Pzas', color='Tienda', title="Top 20 Colaboradores"), use_container_width=True)
             st.dataframe(df_user, use_container_width=True)
-        else:
-            st.info("Sin datos para los filtros seleccionados.")
+        else: st.info("Sin datos para los filtros seleccionados.")
 
     with t_model:
         st.markdown("### Top 30 Modelos por Tienda")
-        required = ['devolucion', 'venta']
-        if not df_models.empty and all(m_cols.get(k) for k in required):
+        if not df_models.empty:
             tienda_col = m_cols.get('tienda')
             tiendas_modelos = sorted(df_models[tienda_col].dropna().astype(str).unique().tolist()) if tienda_col in df_models.columns else []
             t_sel = st.selectbox("Tienda para Ranking:", ["Todas"] + tiendas_modelos)
-
             df_mf = df_models.copy()
-            if tienda_col in df_mf.columns and t_sel != "Todas":
-                df_mf = df_mf[df_mf[tienda_col].astype(str) == str(t_sel)]
-
+            if tienda_col in df_mf.columns and t_sel != "Todas": df_mf = df_mf[df_mf[tienda_col].astype(str) == str(t_sel)]
             df_mf = add_recovery_columns(df_mf, m_cols)
-            dimension_cols = [m_cols.get('modelo'), m_cols.get('color'), m_cols.get('merca')]
-            dimension_cols = [c for c in dimension_cols if c and c in df_mf.columns]
-            if not dimension_cols:
-                dimension_cols = [m_cols.get('id')] if m_cols.get('id') in df_mf.columns else []
-
-            if dimension_cols:
-                df_top = summarize_recovery(df_mf, dimension_cols)
-                total_dev = df_top['Devolucion_Pzas'].sum()
-                total_venta = df_top['Venta_Pzas'].sum()
-                total_rec = df_top['Pzas_Recuperadas'].sum()
-                total_neta_rec = df_top['Venta_Neta_Recuperada_$'].sum()
-                total_no_rec = df_top['Pzas_No_Recuperadas'].sum()
-
-                st.markdown(
-                    f'''
-                    <div class="note-box">
-                    <b>Recuperación de venta vs devoluciones:</b> se calcula sobre venta neta y piezas, pero con tope de devolución.
-                    Si entran 10 piezas de devolución y se venden 12 piezas durante la misma semana, la recuperación máxima considerada será 10 piezas.
-                    </div>
-                    ''',
-                    unsafe_allow_html=True
-                )
+            dim_cols = [c for c in [m_cols.get('modelo'), m_cols.get('color'), m_cols.get('merca')] if c and c in df_mf.columns]
+            if not dim_cols: dim_cols = [m_cols.get('id')] if m_cols.get('id') in df_mf.columns else []
+            if dim_cols:
+                df_top = summarize_recovery(df_mf, dim_cols)
+                t_dev, t_venta, t_rec, t_neta_rec = df_top['Devolucion_Pzas'].sum(), df_top['Venta_Pzas'].sum(), df_top['Pzas_Recuperadas'].sum(), df_top['Venta_Neta_Recuperada_$'].sum()
+                st.markdown('<div class="note-box"><b>Recuperación:</b> Venta limitada a devoluciones.</div>', unsafe_allow_html=True)
                 k1, k2, k3, k4 = st.columns(4)
-                with k1:
-                    st.metric("Pzas devolución", f"{total_dev:,.0f}")
-                with k2:
-                    st.metric("Pzas vendidas", f"{total_venta:,.0f}")
-                with k3:
-                    st.metric("Pzas recuperadas", f"{total_rec:,.0f}", delta=f"{safe_div(total_rec, total_dev) * 100:.1f}%")
-                with k4:
-                    st.metric("Venta neta recuperada", f"${total_neta_rec:,.2f}")
-
-                df_top = df_top.sort_values(['Pzas_Recuperadas', 'Venta_Neta_Recuperada_$'], ascending=False).head(30)
-                df_top['Venta_Neta_$'] = df_top['Venta_Neta_$'].round(2)
-                df_top['Venta_Neta_Recuperada_$'] = df_top['Venta_Neta_Recuperada_$'].round(2)
-                df_top['% Recuperacion Dev vs Venta'] = df_top['% Recuperacion Dev vs Venta'].round(1)
-                st.dataframe(df_top, use_container_width=True)
-            else:
-                st.warning("No se encontró una columna de modelo, color, marca o ID para agrupar el Top 30.")
-        else:
-            st.warning("No se encontraron las columnas necesarias de devolución y venta para calcular el Top 30.")
-            st.caption(f"Columnas detectadas: {m_cols}")
+                k1.metric("Pzas devolución", f"{t_dev:,.0f}")
+                k2.metric("Pzas vendidas", f"{t_venta:,.0f}")
+                k3.metric("Pzas recuperadas", f"{t_rec:,.0f}", delta=f"{safe_div(t_rec, t_dev)*100:.1f}%")
+                k4.metric("Venta neta rec.", f"${t_neta_rec:,.2f}")
+                st.dataframe(df_top.sort_values(['Pzas_Recuperadas', 'Venta_Neta_Recuperada_$'], ascending=False).head(30), use_container_width=True)
+            else: st.warning("No se encontraron columnas de modelo/ID.")
+        else: st.warning("No se detectaron datos de modelos en el archivo.")
 
     with t_conv:
-        st.markdown("### Conversión de Devoluciones vs Venta en la Misma Semana")
-        if not df_models.empty and m_cols.get('semana') and m_cols.get('devolucion') and m_cols.get('venta'):
+        st.markdown("### Conversión Semanal")
+        if not df_models.empty and m_cols.get('semana'):
             df_c = add_recovery_columns(df_models, m_cols)
-
-            # Filtro de tienda aplicado también a conversión semanal.
-            tienda_col = m_cols.get('tienda')
-            if tienda_col in df_c.columns and sel_tiendas:
-                df_c = df_c[df_c[tienda_col].astype(str).isin([str(t) for t in sel_tiendas])]
-
             df_c_s = summarize_recovery(df_c, [m_cols['semana']]).sort_values(m_cols['semana'])
-            df_c_s['% Conv Dev vs Venta'] = df_c_s.apply(lambda r: safe_div(r['Pzas_Recuperadas'], r['Devolucion_Pzas']) * 100, axis=1)
-            df_c_s['Venta_Neta_Recuperada_$'] = df_c_s['Venta_Neta_Recuperada_$'].round(2)
-            df_c_s['% Conv Dev vs Venta'] = df_c_s['% Conv Dev vs Venta'].round(1)
-
-            st.markdown(
-                """
-                <div class="note-box">
-                La conversión semanal ahora se calcula como <b>piezas recuperadas / piezas devueltas</b> y las piezas recuperadas se limitan a la cantidad devuelta de esa misma semana. Esto evita que la conversión sea mayor a la devolución ingresada.
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-            st.plotly_chart(
-                px.line(df_c_s, x=m_cols['semana'], y='% Conv Dev vs Venta', markers=True, title="Tendencia de Conversión: Devoluciones vs Venta Misma Semana"),
-                use_container_width=True
-            )
+            st.plotly_chart(px.line(df_c_s, x=m_cols['semana'], y='% Recuperacion Dev vs Venta', markers=True, title="Tendencia de Conversión"), use_container_width=True)
             st.dataframe(df_c_s, use_container_width=True)
-        else:
-            st.warning("No se encontraron columnas suficientes para calcular la conversión semanal por devolución contra venta.")
-            st.caption(f"Columnas detectadas: {m_cols}")
+        else: st.warning("Sin datos de semana para conversión.")
 
-    with t_audit:
-        st.dataframe(df_f, use_container_width=True)
-
-else:
-    st.info("Conectando con la base de datos...")
+    with t_audit: st.dataframe(df_f, use_container_width=True)
+else: st.info("Conectando con la base de datos...")
