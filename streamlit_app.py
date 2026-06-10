@@ -7,41 +7,43 @@ from datetime import datetime
 import gc
 
 # =========================================================================
-# --- CONFIGURACIÓN DE NIVEL BI DIRECTOR (v13) ---
+# --- CONFIGURACIÓN DE NIVEL BI DIRECTOR (v14) ---
 # =========================================================================
-st.set_page_config(page_title="Price Shoes BI - Ultimate Master Center", layout="wide", page_icon="📈")
+st.set_page_config(page_title="Price Shoes BI - Conversion Master", layout="wide", page_icon="📈")
 
 st.markdown("""
     <style>
     .main { background-color: #F8F9FB; }
     .main-title { color: #1F497D; font-size: 36px; font-weight: 900; letter-spacing: -1.5px; margin-bottom: 0px; }
     .sub-title { color: #E6007E; font-size: 14px; font-weight: 800; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 25px; }
-    .wow-card-header { background-color: #1F497D; color: white; text-align: center; padding: 6px; border-radius: 6px 6px 0 0; font-weight: bold; font-size: 12px; }
-    .wow-card-body { background-color: white; border: 1px solid #E0E0E0; border-top: none; border-radius: 0 0 6px 6px; padding: 10px; margin-bottom: 15px; }
-    .wow-metric-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; border-bottom: 1px solid #EEE; padding-bottom: 2px; }
-    .wow-label { color: #666; font-size: 9px; font-weight: 700; text-transform: uppercase; }
-    .wow-value { color: #1F497D; font-size: 14px; font-weight: 800; }
-    .wow-value-pct { color: #E6007E; font-size: 13px; font-weight: 900; }
     .kpi-master { background-color: white; border-radius: 12px; padding: 18px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border-top: 5px solid #1F497D; text-align: center; }
     .kpi-master-label { color: #666; font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 8px; }
     .kpi-master-value { color: #1F497D; font-size: 28px; font-weight: 900; }
+    .semaforo-verde { color: #28a745; font-weight: 900; }
+    .semaforo-amarillo { color: #ffc107; font-weight: 900; }
+    .semaforo-rojo { color: #dc3545; font-weight: 900; }
     .store-row { background-color: #f1f3f6; padding: 8px; border-radius: 8px; margin-top: 20px; margin-bottom: 10px; font-weight: bold; color: #1F497D; border-left: 5px solid #1F497D; }
     </style>
     """, unsafe_allow_html=True)
 
 def to_num(val):
     try:
-        if pd.isna(val): return 0
+        if pd.isna(val) or val == '': return 0
         return float(str(val).replace('$', '').replace(',', '').replace(' ', ''))
     except: return 0
 
 def safe_div(num, den):
     return (num / den) if den and den > 0 else 0
 
+def get_semaforo_class(val):
+    if val >= 80: return "semaforo-verde"
+    if val >= 60: return "semaforo-amarillo"
+    return "semaforo-rojo"
+
 @st.cache_data(ttl=600)
 def load_all_intelligence_data():
     URL_XLSX = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSd7J_FSk0829VZzHVRn4DoJx-E2CT4iK_nKq026i6B8UaPLeoyX5eRtCXYIaZO2pWGPS4Wd94inFYw/pub?output=xlsx"
-    URL_CSV = "https://drive.google.com/uc?export=download&id=15UBabZ8g_VbDMZiPfR2iuW-U9YuNgHWP"
+    meses_dict = {1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril', 5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto', 9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'}
     
     try:
         resp = requests.get(URL_XLSX, timeout=180)
@@ -55,21 +57,31 @@ def load_all_intelligence_data():
         if base_sheet:
             df_b = pd.read_excel(xls, sheet_name=base_sheet[0], engine='openpyxl')
             df_b.columns = [str(c).strip() for c in df_b.columns]
-            df_op = df_b.rename(columns={
+            
+            # Mapeo flexible
+            rename_map = {
                 'Ubicación': 'Tienda', 'Piezas de Ingreso': 'Total_Ing', 
                 'Piezas Habilitadas': 'Pzas_Hab', 'Piezas Ubicadas': 'Pzas_Ubi',
                 'Recorridos Realizados': 'Real_Rec', 'Meta de Recorridos': 'Meta_Rec'
-            })
-            # Asegurar que existan las columnas
+            }
+            df_op = df_b.rename(columns=rename_map)
+            
+            # Si las columnas no existen, intentar detectarlas por posición
+            if 'Tienda' not in df_op.columns and len(df_op.columns) > 3:
+                df_op = df_op.rename(columns={df_op.columns[3]: 'Tienda'})
+            
             for c in ['Total_Ing', 'Pzas_Hab', 'Pzas_Ubi', 'Real_Rec', 'Meta_Rec']:
                 if c not in df_op.columns: df_op[c] = 0
                 else: df_op[c] = df_op[c].apply(to_num)
             
             if 'Fecha' in df_op.columns:
-                df_op['Fecha'] = pd.to_datetime(df_op['Fecha'], errors='coerce')
-                df_op['Semana'] = df_op['Fecha'].dt.isocalendar().week.apply(lambda x: f"Sem {x}")
+                df_op['Fecha_DT'] = pd.to_datetime(df_op['Fecha'], errors='coerce')
+                df_op = df_op[df_op['Fecha_DT'].notna()]
+                df_op['Semana'] = df_op['Fecha_DT'].dt.isocalendar().week.apply(lambda x: f"Sem {x}")
+                df_op['Mes'] = df_op['Fecha_DT'].dt.month.map(meses_dict)
             else:
                 df_op['Semana'] = "Sem Actual"
+                df_op['Mes'] = "Junio"
 
         # 2. Datos de Modelos (Pestaña 'Venta y devolucion')
         model_sheet = [s for s in xls.sheet_names if 'venta y devolucion' in s.lower()]
@@ -89,9 +101,12 @@ def load_all_intelligence_data():
                 try:
                     f_dt = pd.to_datetime(fechas[i])
                     sem_label = f"Sem {f_dt.isocalendar().week}"
+                    mes_label = meses_dict.get(f_dt.month, "Junio")
+                    
                     subset = df_m_raw.iloc[2:, [idx_mod, idx_col, idx_mar, idx_tie, i, i+1, i+2]].copy()
                     subset.columns = ['Modelo', 'Color', 'Marca', 'Tienda', 'Venta', 'Dev', 'Neta_$']
                     subset['Semana'] = sem_label
+                    subset['Mes'] = mes_label
                     melted.append(subset)
                 except: continue
             if melted:
@@ -99,106 +114,107 @@ def load_all_intelligence_data():
                 for c in ['Venta', 'Dev', 'Neta_$']: 
                     df_models[c] = df_models[c].apply(to_num)
 
-        # 3. Colaboradores (CSV)
-        resp_c = requests.get(URL_CSV, timeout=60)
-        df_colab = pd.read_csv(BytesIO(resp_c.content), encoding='latin1', low_memory=False)
-        df_colab = df_colab.rename(columns={'Ubicación': 'Tienda', 'Numero de Piezas': 'Pzas', 'Número de Piezas': 'Pzas'})
-        
-        return df_op, df_models, df_colab
+        return df_op, df_models
     except Exception as e:
         st.error(f"Error de carga: {e}")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()
 
-df_op, df_models, df_colab = load_all_intelligence_data()
+df_op, df_models = load_all_intelligence_data()
 
 if not df_op.empty:
     st.sidebar.image("https://priceshoes.com/media/logo/stores/1/logo_price_shoes.png", width=160)
     st.sidebar.markdown("### Filtros Globales")
     
-    weeks = sorted(df_op['Semana'].unique())
-    sel_w = st.sidebar.multiselect("Semanas:", weeks, default=weeks[-2:] if len(weeks)>1 else weeks)
-    stores = sorted(df_op['Tienda'].unique())
+    meses_ord = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
+    meses_disp = [m for m in meses_ord if m in df_op['Mes'].unique()]
+    sel_m = st.sidebar.multiselect("Meses:", meses_disp, default=meses_disp)
+    
+    weeks = sorted([w for w in df_op['Semana'].unique() if str(w) != 'nan'])
+    sel_w = st.sidebar.multiselect("Semanas:", weeks, default=weeks[-1:] if weeks else [])
+    
+    stores = sorted([t for t in df_op['Tienda'].unique() if str(t) != 'nan'])
     sel_s = st.sidebar.multiselect("Tiendas:", stores, default=stores)
     
-    df_f = df_op[(df_op['Semana'].isin(sel_w)) & (df_op['Tienda'].isin(sel_s))]
+    df_f = df_op[(df_op['Mes'].isin(sel_m)) & (df_op['Semana'].isin(sel_w)) & (df_op['Tienda'].isin(sel_s))]
+    df_mf = df_models[(df_models['Mes'].isin(sel_m)) & (df_models['Semana'].isin(sel_w)) & (df_models['Tienda'].isin(sel_s))] if not df_models.empty else pd.DataFrame()
 
     st.markdown('<p class="main-title">PRICE SHOES • Operational Intelligence Center</p>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-title">CENTRO DE MANDO EJECUTIVO, PRODUCTIVIDAD Y PRODUCTO</p>', unsafe_allow_html=True)
-
-    # --- COMPARATIVO WoW ---
-    st.markdown("### Comparativo Semanal (WoW)")
-    w_show = weeks[-4:]
-    cols_w = st.columns(len(w_show))
-    for i, sem in enumerate(w_show):
-        df_c = df_op[df_op['Semana'] == sem]
-        if sel_s: df_c = df_c[df_c['Tienda'].isin(sel_s)]
-        ing, hab, ubi, rm, rr = df_c['Total_Ing'].sum(), df_c['Pzas_Hab'].sum(), df_c['Pzas_Ubi'].sum(), df_c['Meta_Rec'].sum(), df_c['Real_Rec'].sum()
-        with cols_w[i]:
-            st.markdown(f'<div class="wow-card-header">{sem}</div>', unsafe_allow_html=True)
-            st.markdown(f'''<div class="wow-card-body">
-                <div class="wow-metric-row"><span class="wow-label">Ingreso</span><span class="wow-value">{ing:,.0f}</span></div>
-                <div class="wow-metric-row"><span class="wow-label">% Hab/Ing</span><span class="wow-value-pct">{safe_div(hab,ing)*100:.1f}%</span></div>
-                <div class="wow-metric-row"><span class="wow-label">% Ubi/Ing</span><span class="wow-value-pct">{safe_div(ubi,ing)*100:.1f}%</span></div>
-                <div class="wow-metric-row"><span class="wow-label">% Rec vs Meta</span><span class="wow-value-pct">{safe_div(rr,rm)*100:.1f}%</span></div>
-            </div>''', unsafe_allow_html=True)
+    st.markdown('<p class="sub-title">SISTEMA DE CONTROL DE CONVERSIÓN Y RECUPERACIÓN</p>', unsafe_allow_html=True)
 
     # --- TABS ---
-    t_exec, t_prod, t_model, t_conv, t_audit = st.tabs(["SCORECARD", "COLABORADORES", "TOP 30 MODELOS", "CONVERSIÓN", "AUDITORÍA"])
+    t_exec, t_conv, t_model, t_audit = st.tabs(["📊 SCORECARD", "📈 CONVERSIÓN SEMANAL", "🏆 TOP 30 MODELOS", "📋 AUDITORÍA"])
 
     with t_exec:
-        st.markdown("### Consolidado Global")
-        i_t, h_t, u_t, rm_t, rr_t = df_f['Total_Ing'].sum(), df_f['Pzas_Hab'].sum(), df_f['Pzas_Ubi'].sum(), df_f['Meta_Rec'].sum(), df_f['Real_Rec'].sum()
-        c1, c2, c3, c4 = st.columns(4)
-        with c1: st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">Ingresos</p><p class="kpi-master-value">{i_t:,.0f}</p></div>', unsafe_allow_html=True)
-        with c2: st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">Habilitado / Ingreso</p><p class="kpi-master-value">{safe_div(h_t, i_t) * 100:.1f}%</p></div>', unsafe_allow_html=True)
-        with c3: st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">Ubicado / Ingreso</p><p class="kpi-master-value">{safe_div(u_t, i_t) * 100:.1f}%</p></div>', unsafe_allow_html=True)
-        with c4: st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">Recorridos vs Meta</p><p class="kpi-master-value">{safe_div(rr_t, rm_t) * 100:.1f}%</p></div>', unsafe_allow_html=True)
-        
-        st.markdown("### Desglose por Tienda")
-        for t in sorted(df_f['Tienda'].unique()):
-            dt = df_f[df_f['Tienda'] == t]
-            it, ht, ut, rmt, rrt = dt['Total_Ing'].sum(), dt['Pzas_Hab'].sum(), dt['Pzas_Ubi'].sum(), dt['Meta_Rec'].sum(), dt['Real_Rec'].sum()
-            st.markdown(f'<div class="store-row">📍 {t}</div>', unsafe_allow_html=True)
-            k1, k2, k3, k4 = st.columns(4)
-            k1.metric("Ingresos", f"{it:,.0f}")
-            k2.metric("Hab / Ing", f"{safe_div(ht, it)*100:.1f}%")
-            k3.metric("Ubi / Ing", f"{safe_div(ut, it)*100:.1f}%")
-            k4.metric("Rec vs Meta", f"{safe_div(rrt, rmt)*100:.1f}%")
-
-    with t_prod:
-        st.markdown("### Productividad por Colaborador")
-        if not df_colab.empty:
-            df_cf = df_colab[df_colab['Tienda'].isin(sel_s)]
-            df_cf['Pzas'] = df_cf['Pzas'].apply(to_num)
-            user = df_cf.groupby(['Nombre', 'Tienda'])['Pzas'].sum().reset_index().sort_values('Pzas', ascending=False)
-            st.plotly_chart(px.bar(user.head(20), x='Nombre', y='Pzas', color='Tienda', title="Top 20 Productividad"), use_container_width=True)
-            st.dataframe(user, use_container_width=True)
-
-    with t_model:
-        st.markdown("### Top 30 Modelos (Recuperación)")
-        if not df_models.empty:
-            df_mf = df_models[(df_models['Semana'].isin(sel_w)) & (df_models['Tienda'].isin(sel_s))]
-            top = df_mf.groupby(['Modelo', 'Color', 'Marca']).agg({'Dev': 'sum', 'Venta': 'sum', 'Neta_$': 'sum'}).reset_index()
-            top['Recuperadas'] = top[['Dev', 'Venta']].min(axis=1)
-            top['Venta_Rec_$'] = top.apply(lambda r: r['Neta_$'] * safe_div(r['Recuperadas'], r['Venta']), axis=1)
+        st.markdown("### Resumen Ejecutivo de Conversión")
+        if not df_mf.empty:
+            # Cálculos de conversión
+            total_dev = df_mf['Dev'].sum()
+            total_venta = df_mf['Venta'].sum()
+            total_rec_pzas = df_mf.groupby(['Modelo', 'Color', 'Marca', 'Tienda']).apply(lambda x: min(x['Dev'].sum(), x['Venta'].sum())).sum()
             
-            k1, k2, k3 = st.columns(3)
-            k1.metric("Pzas Devolución", f"{top['Dev'].sum():,.0f}")
-            k2.metric("Pzas Recuperadas", f"{top['Recuperadas'].sum():,.0f}", delta=f"{safe_div(top['Recuperadas'].sum(), top['Dev'].sum())*100:.1f}%")
-            k3.metric("Venta Neta Rec.", f"${top['Venta_Rec_$'].sum():,.2f}")
-            st.dataframe(top.sort_values('Recuperadas', ascending=False).head(30), use_container_width=True)
+            # Valor de recuperación
+            df_mf['Rec_Pzas'] = df_mf.apply(lambda r: min(r['Dev'], r['Venta']), axis=1)
+            df_mf['Val_Rec_$'] = df_mf.apply(lambda r: r['Neta_$'] * safe_div(r['Rec_Pzas'], r['Venta']), axis=1)
+            val_total_rec = df_mf['Val_Rec_$'].sum()
+            val_pendiente = (df_mf['Neta_$'].sum() - val_total_rec) if total_venta > total_dev else 0
+            
+            conv_gen = safe_div(total_rec_pzas, total_dev) * 100
+            
+            # Tiendas mejor/peor
+            tienda_stats = df_mf.groupby('Tienda').apply(lambda x: safe_div(min(x['Dev'].sum(), x['Venta'].sum()), x['Dev'].sum()) * 100).reset_index(name='Conv')
+            mejor_t = tienda_stats.sort_values('Conv', ascending=False).iloc[0] if not tienda_stats.empty else None
+            peor_t = tienda_stats.sort_values('Conv', ascending=True).iloc[0] if not tienda_stats.empty else None
+
+            c1, c2, c3, c4, c5 = st.columns(5)
+            with c1: st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">Conversión Gral.</p><p class="kpi-master-value {get_semaforo_class(conv_gen)}">{conv_gen:.1f}%</p></div>', unsafe_allow_html=True)
+            with c2: st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">Mejor Tienda</p><p class="kpi-master-value" style="font-size:18px">{mejor_t["Tienda"] if mejor_t is not None else "N/A"}</p><p style="color:#28a745; font-weight:bold">{mejor_t["Conv"]:.1f}%</p></div>', unsafe_allow_html=True)
+            with c3: st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">Peor Tienda</p><p class="kpi-master-value" style="font-size:18px">{peor_t["Tienda"] if peor_t is not None else "N/A"}</p><p style="color:#dc3545; font-weight:bold">{peor_t["Conv"]:.1f}%</p></div>', unsafe_allow_html=True)
+            with c4: st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">Valor Recuperado</p><p class="kpi-master-value">${val_total_rec:,.0f}</p></div>', unsafe_allow_html=True)
+            with c5: st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">Valor Pendiente</p><p class="kpi-master-value">${val_pendiente:,.0f}</p></div>', unsafe_allow_html=True)
         else:
-            st.warning("No hay datos de modelos para los filtros seleccionados.")
+            st.warning("No hay datos de modelos para calcular la conversión ejecutiva.")
+
+        st.markdown("### Scorecard por Tienda")
+        i_t, h_t, u_t, rm_t, rr_t = df_f['Total_Ing'].sum(), df_f['Pzas_Hab'].sum(), df_f['Pzas_Ubi'].sum(), df_f['Meta_Rec'].sum(), df_f['Real_Rec'].sum()
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Ingresos Totales", f"{i_t:,.0f}")
+        k2.metric("Hab / Ing", f"{safe_div(h_t, i_t) * 100:.1f}%")
+        k3.metric("Ubi / Ing", f"{safe_div(u_t, i_t) * 100:.1f}%")
+        k4.metric("Rec vs Meta", f"{safe_div(rr_t, rm_t) * 100:.1f}%")
 
     with t_conv:
-        st.markdown("### Tendencia de Conversión")
+        st.markdown("### Análisis de Conversión por Tienda")
+        if not df_mf.empty:
+            tienda_conv = df_mf.groupby('Tienda').agg({'Dev': 'sum', 'Venta': 'sum', 'Val_Rec_$': 'sum', 'Neta_$': 'sum'}).reset_index()
+            tienda_conv['Rec_Pzas'] = tienda_conv.apply(lambda r: min(r['Dev'], r['Venta']), axis=1)
+            tienda_conv['Conv_%'] = tienda_conv.apply(lambda r: safe_div(r['Rec_Pzas'], r['Dev']) * 100, axis=1)
+            tienda_conv['Pzas_Pend'] = (tienda_conv['Dev'] - tienda_conv['Rec_Pzas']).clip(lower=0)
+            tienda_conv['Val_Pend_$'] = (tienda_conv['Neta_$'] - tienda_conv['Val_Rec_$']).clip(lower=0)
+            
+            st.plotly_chart(px.bar(tienda_conv.sort_values('Conv_%', ascending=False), x='Tienda', y='Conv_%', color='Conv_%', 
+                                   color_continuous_scale=['red', 'yellow', 'green'], title="Ranking de Tiendas por Conversión"), use_container_width=True)
+            
+            st.dataframe(tienda_conv[['Tienda', 'Dev', 'Venta', 'Conv_%', 'Pzas_Pend', 'Val_Rec_$', 'Val_Pend_$']].sort_values('Conv_%', ascending=False), use_container_width=True)
+        
+        st.markdown("### Tendencia Semanal de Conversión")
         if not df_models.empty:
-            conv = df_models.groupby('Semana').agg({'Dev': 'sum', 'Venta': 'sum'}).reset_index()
-            conv['Rec'] = conv[['Dev', 'Venta']].min(axis=1)
-            conv['%'] = conv.apply(lambda r: safe_div(r['Rec'], r['Dev'])*100, axis=1)
-            st.plotly_chart(px.line(conv, x='Semana', y='%', markers=True, title="Evolución % Recuperación"), use_container_width=True)
+            sem_conv = df_models.groupby('Semana').agg({'Dev': 'sum', 'Venta': 'sum'}).reset_index()
+            sem_conv['Rec'] = sem_conv.apply(lambda r: min(r['Dev'], r['Venta']), axis=1)
+            sem_conv['Conv_%'] = sem_conv.apply(lambda r: safe_div(r['Rec'], r['Dev']) * 100, axis=1)
+            st.plotly_chart(px.line(sem_conv, x='Semana', y='Conv_%', markers=True, title="Evolución Semanal de Conversión %"), use_container_width=True)
+
+    with t_model:
+        st.markdown("### Top 30 Modelos (Efectividad de Recuperación)")
+        if not df_mf.empty:
+            top_mod = df_mf.groupby(['Modelo', 'Color', 'Marca']).agg({'Dev': 'sum', 'Venta': 'sum', 'Val_Rec_$': 'sum'}).reset_index()
+            top_mod['Rec_Pzas'] = top_mod.apply(lambda r: min(r['Dev'], r['Venta']), axis=1)
+            top_mod['Conv_%'] = top_mod.apply(lambda r: safe_div(r['Rec_Pzas'], r['Dev']) * 100, axis=1)
+            st.dataframe(top_mod.sort_values(['Rec_Pzas', 'Val_Rec_$'], ascending=False).head(30), use_container_width=True)
+        else:
+            st.warning("No hay datos de modelos disponibles.")
 
     with t_audit:
+        st.markdown("### Datos Crudos de Operación")
         st.dataframe(df_f, use_container_width=True)
 else:
-    st.info("Conectando con la base de datos ejecutiva...")
+    st.info("Conectando con la base de datos de Price Shoes... Por favor espera.")
