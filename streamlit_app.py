@@ -6,7 +6,7 @@ from datetime import datetime
 import gc
 
 # =========================================================================
-# --- CONFIGURACIÓN DE MEMORIA MÍNIMA (v9) ---
+# --- CONFIGURACIÓN DE ALTA DISPONIBILIDAD (v10) ---
 # =========================================================================
 st.set_page_config(page_title="Price Shoes BI", layout="wide")
 
@@ -17,7 +17,7 @@ def to_num(val):
     except: return 0
 
 @st.cache_data(ttl=600)
-def load_and_process_data():
+def load_data_safe():
     URL_XLSX = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSd7J_FSk0829VZzHVRn4DoJx-E2CT4iK_nKq026i6B8UaPLeoyX5eRtCXYIaZO2pWGPS4Wd94inFYw/pub?output=xlsx"
     URL_CSV = "https://drive.google.com/uc?export=download&id=15UBabZ8g_VbDMZiPfR2iuW-U9YuNgHWP"
     
@@ -26,96 +26,88 @@ def load_and_process_data():
         xls = pd.ExcelFile(BytesIO(resp.content), engine='openpyxl')
         
         all_op = []
-        # Para modelos, guardaremos un diccionario de agregados para no saturar RAM
-        # Estructura: {(Semana, Tienda, Modelo, Color, Marca): [Dev, Venta, Neta$]}
-        model_aggregates = {}
+        df_models = pd.DataFrame()
         
+        # 1. Procesar hojas operativas (Semanas)
         for sheet in xls.sheet_names:
             if 'sem' in sheet.lower():
-                df_s = pd.read_excel(xls, sheet_name=sheet, header=None, engine='openpyxl')
-                h_rows = df_s[df_s[1] == 'Tienda'].index.tolist()
-                for h_idx in h_rows:
-                    fecha = df_s.iloc[h_idx - 1, 1]
-                    if not isinstance(fecha, datetime): continue
-                    d_idx = h_idx + 1
-                    while d_idx < len(df_s) and pd.notna(df_s.iloc[d_idx, 1]):
-                        r = df_s.iloc[d_idx, 1:15].tolist()
-                        all_op.append({
-                            'Tienda': str(r[0]), 'Total_Ing': to_num(r[5]), 'Meta_Rec': to_num(r[6]), 
-                            'Real_Rec': to_num(r[7]), 'Pzas_Hab': to_num(r[9]), 'Pzas_Ubi': to_num(r[10]), 
-                            'Semana': sheet
-                        })
-                        d_idx += 1
-                del df_s
-                gc.collect()
-            
-            if 'venta y devolucion' in sheet.lower():
-                # Procesamiento ultra-ligero: Leer solo las filas necesarias
-                df_m_raw = pd.read_excel(xls, sheet_name=sheet, header=None, engine='openpyxl')
+                try:
+                    df_s = pd.read_excel(xls, sheet_name=sheet, header=None, engine='openpyxl')
+                    h_rows = df_s[df_s[1] == 'Tienda'].index.tolist()
+                    for h_idx in h_rows:
+                        fecha = df_s.iloc[h_idx - 1, 1]
+                        if not isinstance(fecha, datetime): continue
+                        d_idx = h_idx + 1
+                        while d_idx < len(df_s) and pd.notna(df_s.iloc[d_idx, 1]):
+                            r = df_s.iloc[d_idx, 1:15].tolist()
+                            all_op.append({
+                                'Tienda': str(r[0]), 'Total_Ing': to_num(r[5]), 'Meta_Rec': to_num(r[6]), 
+                                'Real_Rec': to_num(r[7]), 'Pzas_Hab': to_num(r[9]), 'Pzas_Ubi': to_num(r[10]), 
+                                'Semana': sheet
+                            })
+                            d_idx += 1
+                    del df_s
+                    gc.collect()
+                except: continue
+
+        # 2. Procesar hoja de modelos (Venta y Devolución)
+        # Intentamos cargar solo las columnas necesarias para ahorrar RAM
+        if 'venta y devolucion' in [s.lower() for s in xls.sheet_names]:
+            sheet_name = [s for s in xls.sheet_names if 'venta y devolucion' in s.lower()][0]
+            try:
+                # Leemos solo las primeras 5000 filas para evitar caídas si el archivo es masivo
+                df_m_raw = pd.read_excel(xls, sheet_name=sheet_name, header=None, engine='openpyxl', nrows=5000)
                 fechas = df_m_raw.iloc[0].tolist()
                 cabeceras = df_m_raw.iloc[1].tolist()
                 
-                # Mapeo de columnas fijas
                 idx_mod = cabeceras.index('Modelo') if 'Modelo' in cabeceras else 4
                 idx_col = cabeceras.index('Color') if 'Color' in cabeceras else 7
                 idx_mar = cabeceras.index('Marca Price') if 'Marca Price' in cabeceras else 3
                 idx_tie = cabeceras.index('Tiendas') if 'Tiendas' in cabeceras else 25
                 
-                # Procesar cada bloque de 3 columnas (Venta, Dev, $)
+                melted = []
                 for i in range(25, len(cabeceras), 3):
                     if i+2 >= len(cabeceras) or pd.isna(fechas[i]): continue
                     try:
                         f_dt = pd.to_datetime(fechas[i])
                         sem_label = f"Sem {f_dt.isocalendar().week}"
                         
-                        # Extraer solo las columnas del bloque para esta iteración
-                        for row_idx in range(2, len(df_m_raw)):
-                            row = df_m_raw.iloc[row_idx]
-                            mod, col, mar, tie = str(row[idx_mod]), str(row[idx_col]), str(row[idx_mar]), str(row[idx_tie])
-                            v, d, n = to_num(row[i]), to_num(row[i+1]), to_num(row[i+2])
-                            
-                            if v == 0 and d == 0: continue
-                            
-                            key = (sem_label, tie, mod, col, mar)
-                            if key not in model_aggregates:
-                                model_aggregates[key] = [0, 0, 0]
-                            model_aggregates[key][0] += d
-                            model_aggregates[key][1] += v
-                            model_aggregates[key][2] += n
+                        subset = df_m_raw.iloc[2:, [idx_mod, idx_col, idx_mar, idx_tie, i, i+1, i+2]].copy()
+                        subset.columns = ['Modelo', 'Color', 'Marca', 'Tienda', 'Venta', 'Dev', 'Neta_$']
+                        subset['Semana'] = sem_label
+                        melted.append(subset)
                     except: continue
+                
+                if melted:
+                    df_models = pd.concat(melted, ignore_index=True)
+                    for c in ['Venta', 'Dev', 'Neta_$']: 
+                        df_models[c] = pd.to_numeric(df_models[c].astype(str).str.replace('$', '').str.replace(',', ''), errors='coerce').fillna(0)
                 del df_m_raw
                 gc.collect()
-        
-        # Convertir agregados de modelos a DataFrame final
-        model_data_list = []
-        for k, v in model_aggregates.items():
-            model_data_list.append({
-                'Semana': k[0], 'Tienda': k[1], 'Modelo': k[2], 'Color': k[3], 'Marca': k[4],
-                'Dev': v[0], 'Venta': v[1], 'Neta_$': v[2]
-            })
-        df_models = pd.DataFrame(model_data_list)
+            except: pass
+
         df_op = pd.DataFrame(all_op)
         
-        # Cargar colaboradores
+        # 3. Cargar colaboradores (CSV)
         resp_c = requests.get(URL_CSV, timeout=60)
         df_m = pd.read_csv(BytesIO(resp_c.content), encoding='latin1', low_memory=False)
         df_m = df_m.rename(columns={'Ubicación': 'Tienda', 'Numero de Piezas': 'Pzas', 'Número de Piezas': 'Pzas'})
         
         return df_op, df_models, df_m
     except Exception as e:
-        st.error(f"Error de procesamiento: {e}")
+        st.error(f"Error crítico de carga: {e}")
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-df_op, df_models, df_m = load_and_process_data()
+df_op, df_models, df_m = load_data_safe()
 
 if not df_op.empty:
-    st.sidebar.header("Filtros")
+    st.sidebar.title("Filtros")
     sel_w = st.sidebar.multiselect("Semanas", sorted(df_op['Semana'].unique()), default=df_op['Semana'].unique())
     sel_s = st.sidebar.multiselect("Tiendas", sorted(df_op['Tienda'].unique()), default=df_op['Tienda'].unique())
     
     df_f = df_op[(df_op['Semana'].isin(sel_w)) & (df_op['Tienda'].isin(sel_s))]
     
-    st.title("Price Shoes BI")
+    st.title("Price Shoes Operational BI")
     
     t1, t2, t3 = st.tabs(["Scorecard", "Top 30 Modelos", "Colaboradores"])
     
@@ -140,17 +132,17 @@ if not df_op.empty:
     with t2:
         if not df_models.empty:
             df_mf = df_models[(df_models['Semana'].isin(sel_w)) & (df_models['Tienda'].isin(sel_s))]
-            # Agrupar por modelo para el Top 30
             top = df_mf.groupby(['Modelo', 'Color', 'Marca']).agg({'Dev': 'sum', 'Venta': 'sum', 'Neta_$': 'sum'}).reset_index()
             top['Recuperadas'] = top[['Dev', 'Venta']].min(axis=1)
             top['Venta_Rec_$'] = top.apply(lambda r: r['Neta_$'] * (r['Recuperadas']/r['Venta'] if r['Venta']>0 else 0), axis=1)
             
             k1, k2, k3 = st.columns(3)
-            k1.metric("Piezas Dev", f"{top['Dev'].sum():,.0f}")
-            k2.metric("Piezas Rec", f"{top['Recuperadas'].sum():,.0f}")
+            k1.metric("Pzas Dev", f"{top['Dev'].sum():,.0f}")
+            k2.metric("Pzas Rec", f"{top['Recuperadas'].sum():,.0f}")
             k3.metric("Venta Rec $", f"${top['Venta_Rec_$'].sum():,.2f}")
-            
             st.dataframe(top.sort_values('Recuperadas', ascending=False).head(30), use_container_width=True)
+        else:
+            st.warning("Los datos de modelos son demasiado pesados para esta conexión. Intenta filtrar menos semanas.")
 
     with t3:
         if not df_m.empty:
