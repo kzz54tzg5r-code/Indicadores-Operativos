@@ -5,6 +5,7 @@ import plotly.express as px
 import requests
 from io import BytesIO
 from datetime import datetime
+import numpy as np
 
 # =========================================================================
 # --- CONFIGURACIÓN DE NIVEL BI DIRECTOR ---
@@ -50,53 +51,19 @@ def to_number(series):
         errors='coerce'
     ).fillna(0)
 
-
-def detect_column(df, candidates, exclude=None):
-    if df.empty: return None
-    exclude = exclude or []
-    cols = [str(c).strip() for c in df.columns]
-    lower_map = {c: c.lower().replace('_', ' ').replace('-', ' ') for c in cols}
-
-    for candidate in candidates:
-        candidate_l = candidate.lower()
-        for col, col_l in lower_map.items():
-            if candidate_l == col_l and not any(x.lower() in col_l for x in exclude):
-                return col
-    for candidate in candidates:
-        candidate_l = candidate.lower()
-        for col, col_l in lower_map.items():
-            if candidate_l in col_l and not any(x.lower() in col_l for x in exclude):
-                return col
-    return None
-
-
-def build_model_column_map(df_models):
-    return {
-        'id': detect_column(df_models, ['id', 'sku', 'codigo', 'código']),
-        'modelo': detect_column(df_models, ['modelo', 'model']),
-        'color': detect_column(df_models, ['color']),
-        'merca': detect_column(df_models, ['merca', 'marca', 'departamento', 'linea', 'línea']),
-        'devolucion': detect_column(df_models, ['devolucion', 'devolución', 'devuelto', 'devoluciones', 'pzas dev', 'piezas dev']),
-        'venta': detect_column(df_models, ['venta pzas', 'pzas venta', 'piezas venta', 'venta', 'vendidas', 'pzas vendidas'], exclude=['neta', 'importe', 'monto', '$', 'pesos']),
-        'venta_neta': detect_column(df_models, ['venta neta', 'venta neta $', 'venta $', 'importe venta', 'monto venta', 'neto venta', 'net sales', 'importe', 'monto'], exclude=['pieza', 'pzas', 'unidades']),
-        'tienda': detect_column(df_models, ['tienda', 'ubicacion', 'ubicación', 'sucursal']),
-        'semana': detect_column(df_models, ['semana', 'week'])
-    }
-
-
 @st.cache_data(ttl=600)
 def load_all_intelligence_data():
-    URL_XLSX = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSV6dtosg0Ydt0o3NMFezC--NjHfEW82onFeY2JR4PTYD3ylG4ZlRaQBquscFrCy_Lysrau9zTW6dkn/pub?output=xlsx"
+    URL_XLSX = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSd7J_FSk0829VZzHVRn4DoJx-E2CT4iK_nKq026i6B8UaPLeoyX5eRtCXYIaZO2pWGPS4Wd94inFYw/pub?output=xlsx"
     URL_CSV = "https://drive.google.com/uc?export=download&id=15UBabZ8g_VbDMZiPfR2iuW-U9YuNgHWP"
     meses_dict = {1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril', 5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto', 9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'}
 
     try:
-        resp_x = requests.get(URL_XLSX, timeout=30)
+        resp_x = requests.get(URL_XLSX, timeout=60)
         resp_x.raise_for_status()
         xls = pd.ExcelFile(BytesIO(resp_x.content), engine='openpyxl')
 
         all_op = []
-        model_frames = []
+        df_models = pd.DataFrame()
 
         for sheet in xls.sheet_names:
             if 'sem' in sheet.lower():
@@ -114,31 +81,35 @@ def load_all_intelligence_data():
                         })
                         d_idx += 1
 
-            # Buscamos la pestaña de modelos (venta y devolucion)
-            is_model_sheet = any(kw in sheet.lower() for kw in ['venta', 'devolucion', 'devolución'])
-            if not is_model_sheet:
-                # Intento de detección por contenido si el nombre no coincide
-                try:
-                    sample = pd.read_excel(xls, sheet_name=sheet, nrows=10, header=None).astype(str).values.flatten()
-                    if any('modelo' in str(v).lower() or 'devolucion' in str(v).lower() for v in sample):
-                        is_model_sheet = True
-                except: pass
-            
-            if is_model_sheet:
-                tmp = pd.read_excel(xls, sheet_name=sheet, engine='openpyxl')
-                # Si la primera fila es basura, intentamos encontrar la cabecera real
-                if 'modelo' not in [str(c).lower() for c in tmp.columns]:
-                    for i in range(5):
-                        test = pd.read_excel(xls, sheet_name=sheet, header=i, engine='openpyxl')
-                        if 'modelo' in [str(c).lower() for c in test.columns] or 'devolucion' in [str(c).lower() for c in test.columns]:
-                            tmp = test
-                            break
-                tmp.columns = [str(c).strip() for c in tmp.columns]
-                tmp['Hoja_Origen'] = sheet
-                model_frames.append(tmp)
-
-        df_models = pd.concat(model_frames, ignore_index=True, sort=False) if model_frames else pd.DataFrame()
-        model_cols = build_model_column_map(df_models)
+            if 'venta y devolucion' in sheet.lower():
+                # Esta hoja tiene fechas en la fila 0 y cabeceras en la fila 1
+                df_raw = pd.read_excel(xls, sheet_name=sheet, header=None, engine='openpyxl')
+                fechas = df_raw.iloc[0].tolist()
+                cabeceras = df_raw.iloc[1].tolist()
+                data = df_raw.iloc[2:].copy()
+                
+                # Columnas base
+                base_cols = cabeceras[:25]
+                data.columns = cabeceras
+                
+                melted_data = []
+                # Las columnas de métricas empiezan en la 25
+                for i in range(25, len(cabeceras), 3):
+                    fecha_val = fechas[i]
+                    if pd.isna(fecha_val): continue
+                    
+                    # Extraer bloque de 3 columnas: Ventas Netas Pzs, Dev Pzs, Venta Neta en $
+                    subset = data.iloc[:, list(range(25)) + [i, i+1, i+2]].copy()
+                    subset.columns = base_cols + ['Ventas_Pzas', 'Dev_Pzas', 'Venta_Neta_$']
+                    subset['Fecha'] = fecha_val
+                    melted_data.append(subset)
+                
+                if melted_data:
+                    df_models = pd.concat(melted_data, ignore_index=True)
+                    df_models['Ventas_Pzas'] = to_number(df_models['Ventas_Pzas'])
+                    df_models['Dev_Pzas'] = to_number(df_models['Dev_Pzas'])
+                    df_models['Venta_Neta_$'] = to_number(df_models['Venta_Neta_$'])
+                    df_models['Semana'] = df_models['Fecha'].dt.isocalendar().week.apply(lambda x: f"Sem {x}")
 
         df_op = pd.DataFrame(all_op)
         if not df_op.empty:
@@ -155,52 +126,35 @@ def load_all_intelligence_data():
         df_m['Fecha_DT'] = pd.to_datetime(df_m['Fecha'], errors='coerce') if 'Fecha' in df_m.columns else pd.NaT
         df_m['Mes'] = df_m['Fecha_DT'].dt.month.map(meses_dict)
 
-        return df_op, df_models, model_cols, df_m
+        return df_op, df_models, df_m
     except Exception as e:
         st.error(f"Error BI: {e}")
-        return pd.DataFrame(), pd.DataFrame(), {}, pd.DataFrame()
-
-
-def add_recovery_columns(df, m_cols):
-    df = df.copy()
-    d_col, v_col, vn_col = m_cols.get('devolucion'), m_cols.get('venta'), m_cols.get('venta_neta')
-    df['Devolucion_Pzas'] = to_number(df[d_col]) if d_col and d_col in df.columns else 0
-    df['Venta_Pzas'] = to_number(df[v_col]) if v_col and v_col in df.columns else 0
-    df['Venta_Neta_$'] = to_number(df[vn_col]) if vn_col and vn_col in df.columns else 0
-    return df
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 
 def summarize_recovery(df, group_cols):
     if df.empty: return pd.DataFrame()
-    grouped = df.groupby(group_cols, dropna=False).agg({'Devolucion_Pzas': 'sum', 'Venta_Pzas': 'sum', 'Venta_Neta_$': 'sum'}).reset_index()
-    grouped['Pzas_Recuperadas'] = grouped[['Devolucion_Pzas', 'Venta_Pzas']].min(axis=1)
-    grouped['Venta_Neta_Recuperada_$'] = grouped.apply(lambda r: r['Venta_Neta_$'] * safe_div(r['Pzas_Recuperadas'], r['Venta_Pzas']) if r['Venta_Pzas'] > 0 else 0, axis=1)
-    grouped['% Recuperacion Dev vs Venta'] = grouped.apply(lambda r: safe_div(r['Pzas_Recuperadas'], r['Devolucion_Pzas']) * 100, axis=1)
-    grouped['Pzas_No_Recuperadas'] = (grouped['Devolucion_Pzas'] - grouped['Pzas_Recuperadas']).clip(lower=0)
+    grouped = df.groupby(group_cols, dropna=False).agg({'Dev_Pzas': 'sum', 'Ventas_Pzas': 'sum', 'Venta_Neta_$': 'sum'}).reset_index()
+    # Lógica de conversión: Venta limitada a devoluciones
+    grouped['Pzas_Recuperadas'] = grouped[['Dev_Pzas', 'Ventas_Pzas']].min(axis=1)
+    # Proporción de la venta neta recuperada
+    grouped['Venta_Neta_Recuperada_$'] = grouped.apply(lambda r: r['Venta_Neta_$'] * safe_div(r['Pzas_Recuperadas'], r['Ventas_Pzas']) if r['Ventas_Pzas'] > 0 else 0, axis=1)
+    grouped['% Recuperacion Dev vs Venta'] = grouped.apply(lambda r: safe_div(r['Pzas_Recuperadas'], r['Dev_Pzas']) * 100, axis=1)
     return grouped
 
 
-df_op, df_models, m_cols, df_m = load_all_intelligence_data()
+df_op, df_models, df_m = load_all_intelligence_data()
 
 if not df_op.empty:
     st.sidebar.image("https://priceshoes.com/media/logo/stores/1/logo_price_shoes.png", width=160)
-    st.sidebar.markdown("### Filtros")
+    st.sidebar.markdown("### Filtros Globales")
     
-    # --- FILTRO POR SEMANA ---
     all_weeks = sorted(df_op['Semana'].dropna().unique().tolist(), key=lambda x: int(''.join(filter(str.isdigit, str(x))) or 0))
     sel_semanas = st.sidebar.multiselect("Semanas:", all_weeks, default=all_weeks)
-    
     sel_tiendas = st.sidebar.multiselect("Tiendas:", sorted(df_op['Tienda'].dropna().unique().tolist()), default=df_op['Tienda'].dropna().unique().tolist())
     sel_meses = st.sidebar.multiselect("Meses:", ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'], default=df_op['Mes'].dropna().unique().tolist())
     
-    act_list = sorted([str(x) for x in df_m['Actividad'].dropna().unique()]) if not df_m.empty and 'Actividad' in df_m.columns else []
-    sel_act = st.sidebar.multiselect("Actividades:", act_list, default=act_list)
-
-    # Aplicación de filtros
     df_f = df_op[(df_op['Tienda'].isin(sel_tiendas)) & (df_op['Mes'].isin(sel_meses)) & (df_op['Semana'].isin(sel_semanas))]
-    if not df_m.empty and {'Tienda', 'Mes', 'Actividad'}.issubset(df_m.columns):
-        df_m_f = df_m[(df_m['Tienda'].isin(sel_tiendas)) & (df_m['Mes'].isin(sel_meses)) & (df_m['Actividad'].astype(str).isin(sel_act))]
-    else: df_m_f = pd.DataFrame()
 
     st.markdown('<p class="main-title">PRICE SHOES • Operational Intelligence Center</p>', unsafe_allow_html=True)
     st.markdown('<p class="sub-title">CENTRO DE MANDO EJECUTIVO, PRODUCTIVIDAD Y PRODUCTO</p>', unsafe_allow_html=True)
@@ -250,57 +204,40 @@ if not df_op.empty:
 
     with t_prod:
         st.markdown("### Ranking de Productividad por Colaborador")
-        if not df_m_f.empty:
+        if not df_m.empty:
+            df_m_f = df_m[(df_m['Tienda'].isin(sel_tiendas)) & (df_m['Mes'].isin(sel_meses))]
             df_m_f['Pzas'] = to_number(df_m_f['Pzas'])
             df_user = df_m_f.groupby(['Nombre', 'Tienda']).agg({'Pzas': 'sum'}).reset_index().sort_values('Pzas', ascending=False)
             st.plotly_chart(px.bar(df_user.head(20), x='Nombre', y='Pzas', color='Tienda', title="Top 20 Colaboradores"), use_container_width=True)
             st.dataframe(df_user, use_container_width=True)
-        else: st.info("Sin datos para los filtros seleccionados.")
 
     with t_model:
-        st.markdown("### Top 30 Modelos por Tienda")
+        st.markdown("### Top 30 Modelos")
         if not df_models.empty:
-            tienda_col = m_cols.get('tienda')
-            sem_col = m_cols.get('semana')
-            
-            # Filtro adicional de semana para modelos si existe la columna
             df_mf = df_models.copy()
-            if sem_col in df_mf.columns:
-                weeks_model = sorted(df_mf[sem_col].dropna().unique().tolist())
-                sel_sem_m = st.multiselect("Filtrar Semanas (Modelos):", weeks_model, default=weeks_model)
-                df_mf = df_mf[df_mf[sem_col].isin(sel_sem_m)]
-
-            tiendas_modelos = sorted(df_mf[tienda_col].dropna().astype(str).unique().tolist()) if tienda_col in df_mf.columns else []
-            t_sel = st.selectbox("Tienda para Ranking:", ["Todas"] + tiendas_modelos)
-            if tienda_col in df_mf.columns and t_sel != "Todas": df_mf = df_mf[df_mf[tienda_col].astype(str) == str(t_sel)]
+            if sel_semanas: df_mf = df_mf[df_mf['Semana'].isin(sel_semanas)]
+            if sel_tiendas: df_mf = df_mf[df_mf['Tiendas'].isin(sel_tiendas)]
             
-            df_mf = add_recovery_columns(df_mf, m_cols)
-            dim_cols = [c for c in [m_cols.get('modelo'), m_cols.get('color'), m_cols.get('merca')] if c and c in df_mf.columns]
-            if not dim_cols: dim_cols = [m_cols.get('id')] if m_cols.get('id') in df_mf.columns else []
+            df_top = summarize_recovery(df_mf, ['Modelo', 'Color', 'Marca Price'])
+            t_dev, t_venta, t_rec, t_neta_rec = df_top['Dev_Pzas'].sum(), df_top['Ventas_Pzas'].sum(), df_top['Pzas_Recuperadas'].sum(), df_top['Venta_Neta_Recuperada_$'].sum()
             
-            if dim_cols:
-                df_top = summarize_recovery(df_mf, dim_cols)
-                t_dev, t_venta, t_rec, t_neta_rec = df_top['Devolucion_Pzas'].sum(), df_top['Venta_Pzas'].sum(), df_top['Pzas_Recuperadas'].sum(), df_top['Venta_Neta_Recuperada_$'].sum()
-                st.markdown('<div class="note-box"><b>Recuperación:</b> Venta limitada a devoluciones.</div>', unsafe_allow_html=True)
-                k1, k2, k3, k4 = st.columns(4)
-                k1.metric("Pzas devolución", f"{t_dev:,.0f}")
-                k2.metric("Pzas vendidas", f"{t_venta:,.0f}")
-                k3.metric("Pzas recuperadas", f"{t_rec:,.0f}", delta=f"{safe_div(t_rec, t_dev)*100:.1f}%")
-                k4.metric("Venta neta rec.", f"${t_neta_rec:,.2f}")
-                st.dataframe(df_top.sort_values(['Pzas_Recuperadas', 'Venta_Neta_Recuperada_$'], ascending=False).head(30), use_container_width=True)
-            else: st.warning("No se encontraron columnas de modelo/ID en las pestañas detectadas.")
+            st.markdown('<div class="note-box"><b>Resumen de Recuperación:</b> Venta neta limitada a devoluciones ingresadas.</div>', unsafe_allow_html=True)
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Pzas Devolución", f"{t_dev:,.0f}")
+            k2.metric("Pzas Vendidas", f"{t_venta:,.0f}")
+            k3.metric("Pzas Recuperadas", f"{t_rec:,.0f}", delta=f"{safe_div(t_rec, t_dev)*100:.1f}%")
+            k4.metric("Venta Neta Rec.", f"${t_neta_rec:,.2f}")
+            
+            st.dataframe(df_top.sort_values(['Pzas_Recuperadas', 'Venta_Neta_Recuperada_$'], ascending=False).head(30), use_container_width=True)
         else:
-            st.warning("⚠️ No se detectó la pestaña 'venta y devolucion' en el archivo publicado.")
-            st.info("💡 **Instrucción para solucionar:** En Google Sheets, ve a 'Archivo' > 'Compartir' > 'Publicar en la Web'. Asegúrate de que 'Todo el documento' esté seleccionado o añade específicamente la pestaña 'venta y devolucion' a la publicación.")
+            st.warning("No se encontraron datos en la pestaña 'venta y devolucion'.")
 
     with t_conv:
         st.markdown("### Conversión Semanal")
-        if not df_models.empty and m_cols.get('semana'):
-            df_c = add_recovery_columns(df_models, m_cols)
-            df_c_s = summarize_recovery(df_c, [m_cols['semana']]).sort_values(m_cols['semana'])
-            st.plotly_chart(px.line(df_c_s, x=m_cols['semana'], y='% Recuperacion Dev vs Venta', markers=True, title="Tendencia de Conversión"), use_container_width=True)
+        if not df_models.empty:
+            df_c_s = summarize_recovery(df_models, ['Semana']).sort_values('Semana')
+            st.plotly_chart(px.line(df_c_s, x='Semana', y='% Recuperacion Dev vs Venta', markers=True, title="Tendencia de Conversión"), use_container_width=True)
             st.dataframe(df_c_s, use_container_width=True)
-        else: st.warning("Sin datos de modelos para mostrar conversión semanal.")
 
     with t_audit: st.dataframe(df_f, use_container_width=True)
 else: st.info("Conectando con la base de datos...")
