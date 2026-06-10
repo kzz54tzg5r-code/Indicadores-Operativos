@@ -71,7 +71,11 @@ def load_all_intelligence_data():
                 h_rows = raw[raw[1] == 'Tienda'].index.tolist()
                 for h_idx in h_rows:
                     fecha = raw.iloc[h_idx - 1, 1]
-                    if not isinstance(fecha, datetime): continue
+                    if not isinstance(fecha, datetime): 
+                        try: fecha = pd.to_datetime(fecha)
+                        except: continue
+                    if pd.isna(fecha): continue
+                    
                     d_idx = h_idx + 1
                     while d_idx < len(raw) and pd.notna(raw.iloc[d_idx, 1]):
                         r = raw.iloc[d_idx, 1:15].tolist()
@@ -82,26 +86,28 @@ def load_all_intelligence_data():
                         d_idx += 1
 
             if 'venta y devolucion' in sheet.lower():
-                # Esta hoja tiene fechas en la fila 0 y cabeceras en la fila 1
                 df_raw = pd.read_excel(xls, sheet_name=sheet, header=None, engine='openpyxl')
-                fechas = df_raw.iloc[0].tolist()
+                fechas_raw = df_raw.iloc[0].tolist()
                 cabeceras = df_raw.iloc[1].tolist()
                 data = df_raw.iloc[2:].copy()
                 
-                # Columnas base
                 base_cols = cabeceras[:25]
                 data.columns = cabeceras
                 
                 melted_data = []
-                # Las columnas de métricas empiezan en la 25
                 for i in range(25, len(cabeceras), 3):
-                    fecha_val = fechas[i]
+                    fecha_val = fechas_raw[i]
                     if pd.isna(fecha_val): continue
                     
-                    # Extraer bloque de 3 columnas: Ventas Netas Pzs, Dev Pzs, Venta Neta en $
+                    # Convertir fecha_val a datetime de forma segura
+                    try:
+                        fecha_dt = pd.to_datetime(fecha_val)
+                        if pd.isna(fecha_dt): continue
+                    except: continue
+                    
                     subset = data.iloc[:, list(range(25)) + [i, i+1, i+2]].copy()
                     subset.columns = base_cols + ['Ventas_Pzas', 'Dev_Pzas', 'Venta_Neta_$']
-                    subset['Fecha'] = fecha_val
+                    subset['Fecha'] = fecha_dt
                     melted_data.append(subset)
                 
                 if melted_data:
@@ -109,7 +115,9 @@ def load_all_intelligence_data():
                     df_models['Ventas_Pzas'] = to_number(df_models['Ventas_Pzas'])
                     df_models['Dev_Pzas'] = to_number(df_models['Dev_Pzas'])
                     df_models['Venta_Neta_$'] = to_number(df_models['Venta_Neta_$'])
-                    df_models['Semana'] = df_models['Fecha'].dt.isocalendar().week.apply(lambda x: f"Sem {x}")
+                    # Cálculo de semana seguro
+                    df_models['Semana_Num'] = df_models['Fecha'].dt.isocalendar().week
+                    df_models['Semana'] = df_models['Semana_Num'].apply(lambda x: f"Sem {x}")
 
         df_op = pd.DataFrame(all_op)
         if not df_op.empty:
@@ -135,9 +143,7 @@ def load_all_intelligence_data():
 def summarize_recovery(df, group_cols):
     if df.empty: return pd.DataFrame()
     grouped = df.groupby(group_cols, dropna=False).agg({'Dev_Pzas': 'sum', 'Ventas_Pzas': 'sum', 'Venta_Neta_$': 'sum'}).reset_index()
-    # Lógica de conversión: Venta limitada a devoluciones
     grouped['Pzas_Recuperadas'] = grouped[['Dev_Pzas', 'Ventas_Pzas']].min(axis=1)
-    # Proporción de la venta neta recuperada
     grouped['Venta_Neta_Recuperada_$'] = grouped.apply(lambda r: r['Venta_Neta_$'] * safe_div(r['Pzas_Recuperadas'], r['Ventas_Pzas']) if r['Ventas_Pzas'] > 0 else 0, axis=1)
     grouped['% Recuperacion Dev vs Venta'] = grouped.apply(lambda r: safe_div(r['Pzas_Recuperadas'], r['Dev_Pzas']) * 100, axis=1)
     return grouped
