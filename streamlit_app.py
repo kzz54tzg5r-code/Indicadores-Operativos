@@ -1,65 +1,78 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 import requests
 from io import BytesIO
 from datetime import datetime
 import gc
 
 # =========================================================================
-# --- CONFIGURACIÓN DE ADAPTACIÓN REAL (v12) ---
+# --- CONFIGURACIÓN DE NIVEL BI DIRECTOR (v13) ---
 # =========================================================================
-st.set_page_config(page_title="Price Shoes BI", layout="wide")
+st.set_page_config(page_title="Price Shoes BI - Ultimate Master Center", layout="wide", page_icon="📈")
+
+st.markdown("""
+    <style>
+    .main { background-color: #F8F9FB; }
+    .main-title { color: #1F497D; font-size: 36px; font-weight: 900; letter-spacing: -1.5px; margin-bottom: 0px; }
+    .sub-title { color: #E6007E; font-size: 14px; font-weight: 800; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 25px; }
+    .wow-card-header { background-color: #1F497D; color: white; text-align: center; padding: 6px; border-radius: 6px 6px 0 0; font-weight: bold; font-size: 12px; }
+    .wow-card-body { background-color: white; border: 1px solid #E0E0E0; border-top: none; border-radius: 0 0 6px 6px; padding: 10px; margin-bottom: 15px; }
+    .wow-metric-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; border-bottom: 1px solid #EEE; padding-bottom: 2px; }
+    .wow-label { color: #666; font-size: 9px; font-weight: 700; text-transform: uppercase; }
+    .wow-value { color: #1F497D; font-size: 14px; font-weight: 800; }
+    .wow-value-pct { color: #E6007E; font-size: 13px; font-weight: 900; }
+    .kpi-master { background-color: white; border-radius: 12px; padding: 18px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border-top: 5px solid #1F497D; text-align: center; }
+    .kpi-master-label { color: #666; font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 8px; }
+    .kpi-master-value { color: #1F497D; font-size: 28px; font-weight: 900; }
+    .store-row { background-color: #f1f3f6; padding: 8px; border-radius: 8px; margin-top: 20px; margin-bottom: 10px; font-weight: bold; color: #1F497D; border-left: 5px solid #1F497D; }
+    </style>
+    """, unsafe_allow_html=True)
 
 def to_num(val):
     try:
-        if pd.isna(val) or val == '': return 0
+        if pd.isna(val): return 0
         return float(str(val).replace('$', '').replace(',', '').replace(' ', ''))
     except: return 0
 
-@st.cache_data(ttl=600)
-def load_excel_data():
-    URL_XLSX = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSd7J_FSk0829VZzHVRn4DoJx-E2CT4iK_nKq026i6B8UaPLeoyX5eRtCXYIaZO2pWGPS4Wd94inFYw/pub?output=xlsx"
-    try:
-        resp = requests.get(URL_XLSX, timeout=180)
-        return BytesIO(resp.content)
-    except: return None
+def safe_div(num, den):
+    return (num / den) if den and den > 0 else 0
 
-def process_all(xls_bytes):
-    df_op = pd.DataFrame()
-    df_models = pd.DataFrame()
+@st.cache_data(ttl=600)
+def load_all_intelligence_data():
+    URL_XLSX = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSd7J_FSk0829VZzHVRn4DoJx-E2CT4iK_nKq026i6B8UaPLeoyX5eRtCXYIaZO2pWGPS4Wd94inFYw/pub?output=xlsx"
+    URL_CSV = "https://drive.google.com/uc?export=download&id=15UBabZ8g_VbDMZiPfR2iuW-U9YuNgHWP"
     
     try:
-        xls = pd.ExcelFile(xls_bytes, engine='openpyxl')
-        sheets = xls.sheet_names
+        resp = requests.get(URL_XLSX, timeout=180)
+        xls = pd.ExcelFile(BytesIO(resp.content), engine='openpyxl')
         
-        # 1. Procesar Datos Operativos (de la pestaña 'Base de datos muertos y cambios')
-        # Buscamos la pestaña que contenga "base de datos"
-        base_sheet = [s for s in sheets if 'base de datos' in s.lower()]
+        df_op = pd.DataFrame()
+        df_models = pd.DataFrame()
+        
+        # 1. Datos Operativos (Pestaña 'Base de datos muertos y cambios')
+        base_sheet = [s for s in xls.sheet_names if 'base de datos' in s.lower()]
         if base_sheet:
             df_b = pd.read_excel(xls, sheet_name=base_sheet[0], engine='openpyxl')
-            # Limpiar nombres de columnas
             df_b.columns = [str(c).strip() for c in df_b.columns]
-            
-            # Mapeo según estructura común de Price Shoes
-            # Si no hay columnas estándar, intentamos identificar por contenido
-            df_op = df_b.copy()
-            # Asegurar columnas mínimas para el Scorecard
-            if 'Ubicación' in df_op.columns: df_op = df_op.rename(columns={'Ubicación': 'Tienda'})
-            elif 'Tienda' not in df_op.columns and len(df_op.columns) > 3: df_op = df_op.rename(columns={df_op.columns[3]: 'Tienda'})
-            
-            # Si no hay métricas, las creamos como 0 para que no falle la UI
-            for c in ['Total_Ing', 'Pzas_Hab', 'Pzas_Ubi', 'Meta_Rec', 'Real_Rec']:
+            df_op = df_b.rename(columns={
+                'Ubicación': 'Tienda', 'Piezas de Ingreso': 'Total_Ing', 
+                'Piezas Habilitadas': 'Pzas_Hab', 'Piezas Ubicadas': 'Pzas_Ubi',
+                'Recorridos Realizados': 'Real_Rec', 'Meta de Recorridos': 'Meta_Rec'
+            })
+            # Asegurar que existan las columnas
+            for c in ['Total_Ing', 'Pzas_Hab', 'Pzas_Ubi', 'Real_Rec', 'Meta_Rec']:
                 if c not in df_op.columns: df_op[c] = 0
+                else: df_op[c] = df_op[c].apply(to_num)
             
-            # Extraer Semana de la fecha si existe
             if 'Fecha' in df_op.columns:
                 df_op['Fecha'] = pd.to_datetime(df_op['Fecha'], errors='coerce')
                 df_op['Semana'] = df_op['Fecha'].dt.isocalendar().week.apply(lambda x: f"Sem {x}")
             else:
                 df_op['Semana'] = "Sem Actual"
 
-        # 2. Procesar Modelos (de la pestaña 'Venta y devolucion')
-        model_sheet = [s for s in sheets if 'venta y devolucion' in s.lower()]
+        # 2. Datos de Modelos (Pestaña 'Venta y devolucion')
+        model_sheet = [s for s in xls.sheet_names if 'venta y devolucion' in s.lower()]
         if model_sheet:
             df_m_raw = pd.read_excel(xls, sheet_name=model_sheet[0], header=None, engine='openpyxl', nrows=2000)
             fechas = df_m_raw.iloc[0].tolist()
@@ -84,74 +97,108 @@ def process_all(xls_bytes):
             if melted:
                 df_models = pd.concat(melted, ignore_index=True)
                 for c in ['Venta', 'Dev', 'Neta_$']: 
-                    df_models[c] = pd.to_numeric(df_models[c].astype(str).str.replace('$', '').str.replace(',', ''), errors='coerce').fillna(0)
+                    df_models[c] = df_models[c].apply(to_num)
+
+        # 3. Colaboradores (CSV)
+        resp_c = requests.get(URL_CSV, timeout=60)
+        df_colab = pd.read_csv(BytesIO(resp_c.content), encoding='latin1', low_memory=False)
+        df_colab = df_colab.rename(columns={'Ubicación': 'Tienda', 'Numero de Piezas': 'Pzas', 'Número de Piezas': 'Pzas'})
         
-        return df_op, df_models
+        return df_op, df_models, df_colab
     except Exception as e:
-        st.error(f"Error procesando: {e}")
-        return pd.DataFrame(), pd.DataFrame()
+        st.error(f"Error de carga: {e}")
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-# --- UI ---
-st.title("Price Shoes BI • Operational Master")
+df_op, df_models, df_colab = load_all_intelligence_data()
 
-xls_bytes = load_excel_data()
-if xls_bytes:
-    df_op, df_models = process_all(xls_bytes)
+if not df_op.empty:
+    st.sidebar.image("https://priceshoes.com/media/logo/stores/1/logo_price_shoes.png", width=160)
+    st.sidebar.markdown("### Filtros Globales")
     
-    if not df_op.empty:
-        # Filtros
-        st.sidebar.header("Filtros")
-        weeks = sorted(df_op['Semana'].unique()) if 'Semana' in df_op.columns else ["Actual"]
-        sel_w = st.sidebar.multiselect("Semanas", weeks, default=weeks)
-        stores = sorted(df_op['Tienda'].unique()) if 'Tienda' in df_op.columns else ["General"]
-        sel_s = st.sidebar.multiselect("Tiendas", stores, default=stores)
-        
-        # Filtrado
-        df_f = df_op
-        if 'Semana' in df_op.columns: df_f = df_f[df_f['Semana'].isin(sel_w)]
-        if 'Tienda' in df_op.columns: df_f = df_f[df_f['Tienda'].isin(sel_s)]
+    weeks = sorted(df_op['Semana'].unique())
+    sel_w = st.sidebar.multiselect("Semanas:", weeks, default=weeks[-2:] if len(weeks)>1 else weeks)
+    stores = sorted(df_op['Tienda'].unique())
+    sel_s = st.sidebar.multiselect("Tiendas:", stores, default=stores)
+    
+    df_f = df_op[(df_op['Semana'].isin(sel_w)) & (df_op['Tienda'].isin(sel_s))]
 
-        t1, t2 = st.tabs(["📊 SCORECARD", "🏷️ TOP 30 MODELOS"])
+    st.markdown('<p class="main-title">PRICE SHOES • Operational Intelligence Center</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-title">CENTRO DE MANDO EJECUTIVO, PRODUCTIVIDAD Y PRODUCTO</p>', unsafe_allow_html=True)
+
+    # --- COMPARATIVO WoW ---
+    st.markdown("### Comparativo Semanal (WoW)")
+    w_show = weeks[-4:]
+    cols_w = st.columns(len(w_show))
+    for i, sem in enumerate(w_show):
+        df_c = df_op[df_op['Semana'] == sem]
+        if sel_s: df_c = df_c[df_c['Tienda'].isin(sel_s)]
+        ing, hab, ubi, rm, rr = df_c['Total_Ing'].sum(), df_c['Pzas_Hab'].sum(), df_c['Pzas_Ubi'].sum(), df_c['Meta_Rec'].sum(), df_c['Real_Rec'].sum()
+        with cols_w[i]:
+            st.markdown(f'<div class="wow-card-header">{sem}</div>', unsafe_allow_html=True)
+            st.markdown(f'''<div class="wow-card-body">
+                <div class="wow-metric-row"><span class="wow-label">Ingreso</span><span class="wow-value">{ing:,.0f}</span></div>
+                <div class="wow-metric-row"><span class="wow-label">% Hab/Ing</span><span class="wow-value-pct">{safe_div(hab,ing)*100:.1f}%</span></div>
+                <div class="wow-metric-row"><span class="wow-label">% Ubi/Ing</span><span class="wow-value-pct">{safe_div(ubi,ing)*100:.1f}%</span></div>
+                <div class="wow-metric-row"><span class="wow-label">% Rec vs Meta</span><span class="wow-value-pct">{safe_div(rr,rm)*100:.1f}%</span></div>
+            </div>''', unsafe_allow_html=True)
+
+    # --- TABS ---
+    t_exec, t_prod, t_model, t_conv, t_audit = st.tabs(["SCORECARD", "COLABORADORES", "TOP 30 MODELOS", "CONVERSIÓN", "AUDITORÍA"])
+
+    with t_exec:
+        st.markdown("### Consolidado Global")
+        i_t, h_t, u_t, rm_t, rr_t = df_f['Total_Ing'].sum(), df_f['Pzas_Hab'].sum(), df_f['Pzas_Ubi'].sum(), df_f['Meta_Rec'].sum(), df_f['Real_Rec'].sum()
+        c1, c2, c3, c4 = st.columns(4)
+        with c1: st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">Ingresos</p><p class="kpi-master-value">{i_t:,.0f}</p></div>', unsafe_allow_html=True)
+        with c2: st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">Habilitado / Ingreso</p><p class="kpi-master-value">{safe_div(h_t, i_t) * 100:.1f}%</p></div>', unsafe_allow_html=True)
+        with c3: st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">Ubicado / Ingreso</p><p class="kpi-master-value">{safe_div(u_t, i_t) * 100:.1f}%</p></div>', unsafe_allow_html=True)
+        with c4: st.markdown(f'<div class="kpi-master"><p class="kpi-master-label">Recorridos vs Meta</p><p class="kpi-master-value">{safe_div(rr_t, rm_t) * 100:.1f}%</p></div>', unsafe_allow_html=True)
         
-        with t1:
-            st.subheader("Indicadores de Gestión")
-            i, h, u, rm, rr = to_num(df_f['Total_Ing'].sum()), to_num(df_f['Pzas_Hab'].sum()), to_num(df_f['Pzas_Ubi'].sum()), to_num(df_f['Meta_Rec'].sum()), to_num(df_f['Real_Rec'].sum())
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Ingresos", f"{i:,.0f}")
-            c2.metric("Hab/Ing", f"{(h/i*100 if i>0 else 0):.1f}%")
-            c3.metric("Ubi/Ing", f"{(u/i*100 if i>0 else 0):.1f}%")
-            c4.metric("Rec vs Meta", f"{(rr/rm*100 if rm>0 else 0):.1f}%")
+        st.markdown("### Desglose por Tienda")
+        for t in sorted(df_f['Tienda'].unique()):
+            dt = df_f[df_f['Tienda'] == t]
+            it, ht, ut, rmt, rrt = dt['Total_Ing'].sum(), dt['Pzas_Hab'].sum(), dt['Pzas_Ubi'].sum(), dt['Meta_Rec'].sum(), dt['Real_Rec'].sum()
+            st.markdown(f'<div class="store-row">📍 {t}</div>', unsafe_allow_html=True)
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Ingresos", f"{it:,.0f}")
+            k2.metric("Hab / Ing", f"{safe_div(ht, it)*100:.1f}%")
+            k3.metric("Ubi / Ing", f"{safe_div(ut, it)*100:.1f}%")
+            k4.metric("Rec vs Meta", f"{safe_div(rrt, rmt)*100:.1f}%")
+
+    with t_prod:
+        st.markdown("### Productividad por Colaborador")
+        if not df_colab.empty:
+            df_cf = df_colab[df_colab['Tienda'].isin(sel_s)]
+            df_cf['Pzas'] = df_cf['Pzas'].apply(to_num)
+            user = df_cf.groupby(['Nombre', 'Tienda'])['Pzas'].sum().reset_index().sort_values('Pzas', ascending=False)
+            st.plotly_chart(px.bar(user.head(20), x='Nombre', y='Pzas', color='Tienda', title="Top 20 Productividad"), use_container_width=True)
+            st.dataframe(user, use_container_width=True)
+
+    with t_model:
+        st.markdown("### Top 30 Modelos (Recuperación)")
+        if not df_models.empty:
+            df_mf = df_models[(df_models['Semana'].isin(sel_w)) & (df_models['Tienda'].isin(sel_s))]
+            top = df_mf.groupby(['Modelo', 'Color', 'Marca']).agg({'Dev': 'sum', 'Venta': 'sum', 'Neta_$': 'sum'}).reset_index()
+            top['Recuperadas'] = top[['Dev', 'Venta']].min(axis=1)
+            top['Venta_Rec_$'] = top.apply(lambda r: r['Neta_$'] * safe_div(r['Recuperadas'], r['Venta']), axis=1)
             
-            if 'Tienda' in df_f.columns:
-                for t in sorted(df_f['Tienda'].unique()):
-                    dt = df_f[df_f['Tienda'] == t]
-                    with st.expander(f"📍 {t}"):
-                        it, ht, ut, rmt, rrt = to_num(dt['Total_Ing'].sum()), to_num(dt['Pzas_Hab'].sum()), to_num(dt['Pzas_Ubi'].sum()), to_num(dt['Meta_Rec'].sum()), to_num(dt['Real_Rec'].sum())
-                        k1, k2, k3, k4 = st.columns(4)
-                        k1.metric("Ing", f"{it:,.0f}")
-                        k2.metric("Hab/Ing", f"{(ht/it*100 if it>0 else 0):.1f}%")
-                        k3.metric("Ubi/Ing", f"{(ut/it*100 if it>0 else 0):.1f}%")
-                        k4.metric("Rec/Meta", f"{(rrt/rmt*100 if rmt>0 else 0):.1f}%")
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Pzas Devolución", f"{top['Dev'].sum():,.0f}")
+            k2.metric("Pzas Recuperadas", f"{top['Recuperadas'].sum():,.0f}", delta=f"{safe_div(top['Recuperadas'].sum(), top['Dev'].sum())*100:.1f}%")
+            k3.metric("Venta Neta Rec.", f"${top['Venta_Rec_$'].sum():,.2f}")
+            st.dataframe(top.sort_values('Recuperadas', ascending=False).head(30), use_container_width=True)
+        else:
+            st.warning("No hay datos de modelos para los filtros seleccionados.")
 
-        with t2:
-            st.subheader("Recuperación: Venta vs Devolución")
-            if not df_models.empty:
-                df_mf = df_models
-                if sel_w: df_mf = df_mf[df_mf['Semana'].isin(sel_w)]
-                if sel_s: df_mf = df_mf[df_mf['Tienda'].isin(sel_s)]
-                
-                top = df_mf.groupby(['Modelo', 'Color', 'Marca']).agg({'Dev': 'sum', 'Venta': 'sum', 'Neta_$': 'sum'}).reset_index()
-                top['Recuperadas'] = top[['Dev', 'Venta']].min(axis=1)
-                top['Venta_Rec_$'] = top.apply(lambda r: r['Neta_$'] * (r['Recuperadas']/r['Venta'] if r['Venta']>0 else 0), axis=1)
-                
-                k1, k2, k3 = st.columns(3)
-                k1.metric("Pzas Dev", f"{top['Dev'].sum():,.0f}")
-                k2.metric("Pzas Rec", f"{top['Recuperadas'].sum():,.0f}")
-                k3.metric("Venta Rec $", f"${top['Venta_Rec_$'].sum():,.2f}")
-                st.dataframe(top.sort_values('Recuperadas', ascending=False).head(30), use_container_width=True)
-            else:
-                st.warning("No se encontraron datos en 'Venta y devolucion'.")
-    else:
-        st.warning("El archivo no contiene las pestañas esperadas de Semanas. Se intentó leer de 'Base de datos muertos y cambios'.")
+    with t_conv:
+        st.markdown("### Tendencia de Conversión")
+        if not df_models.empty:
+            conv = df_models.groupby('Semana').agg({'Dev': 'sum', 'Venta': 'sum'}).reset_index()
+            conv['Rec'] = conv[['Dev', 'Venta']].min(axis=1)
+            conv['%'] = conv.apply(lambda r: safe_div(r['Rec'], r['Dev'])*100, axis=1)
+            st.plotly_chart(px.line(conv, x='Semana', y='%', markers=True, title="Evolución % Recuperación"), use_container_width=True)
+
+    with t_audit:
+        st.dataframe(df_f, use_container_width=True)
 else:
-    st.error("No se pudo conectar con la base de datos.")
+    st.info("Conectando con la base de datos ejecutiva...")
