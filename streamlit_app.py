@@ -4,64 +4,64 @@ import requests
 from io import BytesIO
 from datetime import datetime
 import gc
-import time
 
 # =========================================================================
-# --- CONFIGURACIÓN DE CARGA PROGRESIVA (v11) ---
+# --- CONFIGURACIÓN DE ADAPTACIÓN REAL (v12) ---
 # =========================================================================
 st.set_page_config(page_title="Price Shoes BI", layout="wide")
 
 def to_num(val):
     try:
-        if pd.isna(val): return 0
+        if pd.isna(val) or val == '': return 0
         return float(str(val).replace('$', '').replace(',', '').replace(' ', ''))
     except: return 0
 
 @st.cache_data(ttl=600)
-def load_base_excel():
-    """Descarga el archivo Excel una sola vez y lo guarda en cache"""
+def load_excel_data():
     URL_XLSX = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSd7J_FSk0829VZzHVRn4DoJx-E2CT4iK_nKq026i6B8UaPLeoyX5eRtCXYIaZO2pWGPS4Wd94inFYw/pub?output=xlsx"
     try:
         resp = requests.get(URL_XLSX, timeout=180)
         return BytesIO(resp.content)
-    except Exception as e:
-        st.error(f"Error al descargar base de datos: {e}")
-        return None
+    except: return None
 
-def process_op_data(xls_bytes):
-    """Procesa solo los datos del Scorecard (rápido)"""
-    all_op = []
+def process_all(xls_bytes):
+    df_op = pd.DataFrame()
+    df_models = pd.DataFrame()
+    
     try:
         xls = pd.ExcelFile(xls_bytes, engine='openpyxl')
-        for sheet in xls.sheet_names:
-            if 'sem' in sheet.lower():
-                df_s = pd.read_excel(xls, sheet_name=sheet, header=None, engine='openpyxl')
-                h_rows = df_s[df_s[1] == 'Tienda'].index.tolist()
-                for h_idx in h_rows:
-                    fecha = df_s.iloc[h_idx - 1, 1]
-                    if not isinstance(fecha, datetime): continue
-                    d_idx = h_idx + 1
-                    while d_idx < len(df_s) and pd.notna(df_s.iloc[d_idx, 1]):
-                        r = df_s.iloc[d_idx, 1:15].tolist()
-                        all_op.append({
-                            'Tienda': str(r[0]), 'Total_Ing': to_num(r[5]), 'Meta_Rec': to_num(r[6]), 
-                            'Real_Rec': to_num(r[7]), 'Pzas_Hab': to_num(r[9]), 'Pzas_Ubi': to_num(r[10]), 
-                            'Semana': sheet
-                        })
-                        d_idx += 1
-                del df_s
-                gc.collect()
-        return pd.DataFrame(all_op)
-    except:
-        return pd.DataFrame()
+        sheets = xls.sheet_names
+        
+        # 1. Procesar Datos Operativos (de la pestaña 'Base de datos muertos y cambios')
+        # Buscamos la pestaña que contenga "base de datos"
+        base_sheet = [s for s in sheets if 'base de datos' in s.lower()]
+        if base_sheet:
+            df_b = pd.read_excel(xls, sheet_name=base_sheet[0], engine='openpyxl')
+            # Limpiar nombres de columnas
+            df_b.columns = [str(c).strip() for c in df_b.columns]
+            
+            # Mapeo según estructura común de Price Shoes
+            # Si no hay columnas estándar, intentamos identificar por contenido
+            df_op = df_b.copy()
+            # Asegurar columnas mínimas para el Scorecard
+            if 'Ubicación' in df_op.columns: df_op = df_op.rename(columns={'Ubicación': 'Tienda'})
+            elif 'Tienda' not in df_op.columns and len(df_op.columns) > 3: df_op = df_op.rename(columns={df_op.columns[3]: 'Tienda'})
+            
+            # Si no hay métricas, las creamos como 0 para que no falle la UI
+            for c in ['Total_Ing', 'Pzas_Hab', 'Pzas_Ubi', 'Meta_Rec', 'Real_Rec']:
+                if c not in df_op.columns: df_op[c] = 0
+            
+            # Extraer Semana de la fecha si existe
+            if 'Fecha' in df_op.columns:
+                df_op['Fecha'] = pd.to_datetime(df_op['Fecha'], errors='coerce')
+                df_op['Semana'] = df_op['Fecha'].dt.isocalendar().week.apply(lambda x: f"Sem {x}")
+            else:
+                df_op['Semana'] = "Sem Actual"
 
-def process_model_data(xls_bytes):
-    """Procesa los datos de modelos (pesado)"""
-    try:
-        xls = pd.ExcelFile(xls_bytes, engine='openpyxl')
-        if 'venta y devolucion' in [s.lower() for s in xls.sheet_names]:
-            sheet_name = [s for s in xls.sheet_names if 'venta y devolucion' in s.lower()][0]
-            df_m_raw = pd.read_excel(xls, sheet_name=sheet_name, header=None, engine='openpyxl', nrows=3000)
+        # 2. Procesar Modelos (de la pestaña 'Venta y devolucion')
+        model_sheet = [s for s in sheets if 'venta y devolucion' in s.lower()]
+        if model_sheet:
+            df_m_raw = pd.read_excel(xls, sheet_name=model_sheet[0], header=None, engine='openpyxl', nrows=2000)
             fechas = df_m_raw.iloc[0].tolist()
             cabeceras = df_m_raw.iloc[1].tolist()
             
@@ -82,85 +82,76 @@ def process_model_data(xls_bytes):
                     melted.append(subset)
                 except: continue
             if melted:
-                df = pd.concat(melted, ignore_index=True)
+                df_models = pd.concat(melted, ignore_index=True)
                 for c in ['Venta', 'Dev', 'Neta_$']: 
-                    df[c] = pd.to_numeric(df[c].astype(str).str.replace('$', '').str.replace(',', ''), errors='coerce').fillna(0)
-                return df
-        return pd.DataFrame()
-    except:
-        return pd.DataFrame()
+                    df_models[c] = pd.to_numeric(df_models[c].astype(str).str.replace('$', '').str.replace(',', ''), errors='coerce').fillna(0)
+        
+        return df_op, df_models
+    except Exception as e:
+        st.error(f"Error procesando: {e}")
+        return pd.DataFrame(), pd.DataFrame()
 
-# --- INICIO DE CARGA ---
-st.title("Price Shoes Operational BI")
+# --- UI ---
+st.title("Price Shoes BI • Operational Master")
 
-placeholder = st.empty()
-with placeholder.container():
-    st.info("🚀 Iniciando conexión con Google Sheets... Por favor espera.")
-    progress_bar = st.progress(0)
-
-# Paso 1: Descargar Excel
-xls_bytes = load_base_excel()
+xls_bytes = load_excel_data()
 if xls_bytes:
-    progress_bar.progress(30)
-    st.info("📦 Base de datos descargada. Procesando Scorecard...")
-    
-    # Paso 2: Procesar Datos Operativos (Rápido)
-    df_op = process_op_data(xls_bytes)
-    progress_bar.progress(60)
+    df_op, df_models = process_all(xls_bytes)
     
     if not df_op.empty:
-        placeholder.empty() # Limpiar mensajes de carga
-        
-        # --- SIDEBAR ---
+        # Filtros
         st.sidebar.header("Filtros")
-        sel_w = st.sidebar.multiselect("Semanas", sorted(df_op['Semana'].unique()), default=df_op['Semana'].unique())
-        sel_s = st.sidebar.multiselect("Tiendas", sorted(df_op['Tienda'].unique()), default=df_op['Tienda'].unique())
-        df_f = df_op[(df_op['Semana'].isin(sel_w)) & (df_op['Tienda'].isin(sel_s))]
+        weeks = sorted(df_op['Semana'].unique()) if 'Semana' in df_op.columns else ["Actual"]
+        sel_w = st.sidebar.multiselect("Semanas", weeks, default=weeks)
+        stores = sorted(df_op['Tienda'].unique()) if 'Tienda' in df_op.columns else ["General"]
+        sel_s = st.sidebar.multiselect("Tiendas", stores, default=stores)
         
-        # --- TABS ---
-        t1, t2 = st.tabs(["📈 SCORECARD", "🏆 TOP 30 MODELOS"])
+        # Filtrado
+        df_f = df_op
+        if 'Semana' in df_op.columns: df_f = df_f[df_f['Semana'].isin(sel_w)]
+        if 'Tienda' in df_op.columns: df_f = df_f[df_f['Tienda'].isin(sel_s)]
+
+        t1, t2 = st.tabs(["📊 SCORECARD", "🏷️ TOP 30 MODELOS"])
         
         with t1:
-            st.subheader("Consolidado Global")
-            i, h, u, rm, rr = df_f['Total_Ing'].sum(), df_f['Pzas_Hab'].sum(), df_f['Pzas_Ubi'].sum(), df_f['Meta_Rec'].sum(), df_f['Real_Rec'].sum()
+            st.subheader("Indicadores de Gestión")
+            i, h, u, rm, rr = to_num(df_f['Total_Ing'].sum()), to_num(df_f['Pzas_Hab'].sum()), to_num(df_f['Pzas_Ubi'].sum()), to_num(df_f['Meta_Rec'].sum()), to_num(df_f['Real_Rec'].sum())
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Ingresos", f"{i:,.0f}")
             c2.metric("Hab/Ing", f"{(h/i*100 if i>0 else 0):.1f}%")
             c3.metric("Ubi/Ing", f"{(u/i*100 if i>0 else 0):.1f}%")
             c4.metric("Rec vs Meta", f"{(rr/rm*100 if rm>0 else 0):.1f}%")
             
-            st.subheader("Detalle por Tienda")
-            for t in sorted(df_f['Tienda'].unique()):
-                dt = df_f[df_f['Tienda'] == t]
-                with st.expander(f"📍 {t}"):
-                    it, ht, ut, rmt, rrt = dt['Total_Ing'].sum(), dt['Pzas_Hab'].sum(), dt['Pzas_Ubi'].sum(), dt['Meta_Rec'].sum(), dt['Real_Rec'].sum()
-                    k1, k2, k3, k4 = st.columns(4)
-                    k1.metric("Ing", f"{it:,.0f}")
-                    k2.metric("Hab/Ing", f"{(ht/it*100 if it>0 else 0):.1f}%")
-                    k3.metric("Ubi/Ing", f"{(ut/it*100 if it>0 else 0):.1f}%")
-                    k4.metric("Rec/Meta", f"{(rrt/rmt*100 if rmt>0 else 0):.1f}%")
+            if 'Tienda' in df_f.columns:
+                for t in sorted(df_f['Tienda'].unique()):
+                    dt = df_f[df_f['Tienda'] == t]
+                    with st.expander(f"📍 {t}"):
+                        it, ht, ut, rmt, rrt = to_num(dt['Total_Ing'].sum()), to_num(dt['Pzas_Hab'].sum()), to_num(dt['Pzas_Ubi'].sum()), to_num(dt['Meta_Rec'].sum()), to_num(dt['Real_Rec'].sum())
+                        k1, k2, k3, k4 = st.columns(4)
+                        k1.metric("Ing", f"{it:,.0f}")
+                        k2.metric("Hab/Ing", f"{(ht/it*100 if it>0 else 0):.1f}%")
+                        k3.metric("Ubi/Ing", f"{(ut/it*100 if it>0 else 0):.1f}%")
+                        k4.metric("Rec/Meta", f"{(rrt/rmt*100 if rmt>0 else 0):.1f}%")
 
         with t2:
-            st.subheader("Análisis de Recuperación (Venta vs Devolución)")
-            if st.button("🔍 Cargar Datos de Modelos (Proceso Pesado)"):
-                with st.spinner("Analizando modelos... Esto puede tardar 1-2 minutos."):
-                    df_models = process_model_data(xls_bytes)
-                    if not df_models.empty:
-                        df_mf = df_models[(df_models['Semana'].isin(sel_w)) & (df_models['Tienda'].isin(sel_s))]
-                        top = df_mf.groupby(['Modelo', 'Color', 'Marca']).agg({'Dev': 'sum', 'Venta': 'sum', 'Neta_$': 'sum'}).reset_index()
-                        top['Recuperadas'] = top[['Dev', 'Venta']].min(axis=1)
-                        top['Venta_Rec_$'] = top.apply(lambda r: r['Neta_$'] * (r['Recuperadas']/r['Venta'] if r['Venta']>0 else 0), axis=1)
-                        
-                        k1, k2, k3 = st.columns(3)
-                        k1.metric("Pzas Dev", f"{top['Dev'].sum():,.0f}")
-                        k2.metric("Pzas Rec", f"{top['Recuperadas'].sum():,.0f}")
-                        k3.metric("Venta Rec $", f"${top['Venta_Rec_$'].sum():,.2f}")
-                        st.dataframe(top.sort_values('Recuperadas', ascending=False).head(30), use_container_width=True)
-                    else:
-                        st.error("No se pudieron cargar los modelos. Verifica que la pestaña 'venta y devolucion' esté publicada.")
+            st.subheader("Recuperación: Venta vs Devolución")
+            if not df_models.empty:
+                df_mf = df_models
+                if sel_w: df_mf = df_mf[df_mf['Semana'].isin(sel_w)]
+                if sel_s: df_mf = df_mf[df_mf['Tienda'].isin(sel_s)]
+                
+                top = df_mf.groupby(['Modelo', 'Color', 'Marca']).agg({'Dev': 'sum', 'Venta': 'sum', 'Neta_$': 'sum'}).reset_index()
+                top['Recuperadas'] = top[['Dev', 'Venta']].min(axis=1)
+                top['Venta_Rec_$'] = top.apply(lambda r: r['Neta_$'] * (r['Recuperadas']/r['Venta'] if r['Venta']>0 else 0), axis=1)
+                
+                k1, k2, k3 = st.columns(3)
+                k1.metric("Pzas Dev", f"{top['Dev'].sum():,.0f}")
+                k2.metric("Pzas Rec", f"{top['Recuperadas'].sum():,.0f}")
+                k3.metric("Venta Rec $", f"${top['Venta_Rec_$'].sum():,.2f}")
+                st.dataframe(top.sort_values('Recuperadas', ascending=False).head(30), use_container_width=True)
             else:
-                st.info("Haz clic en el botón de arriba para cargar el análisis de modelos. Se hace por separado para no saturar la memoria.")
+                st.warning("No se encontraron datos en 'Venta y devolucion'.")
     else:
-        st.error("No se encontraron datos operativos en el archivo.")
+        st.warning("El archivo no contiene las pestañas esperadas de Semanas. Se intentó leer de 'Base de datos muertos y cambios'.")
 else:
-    st.error("No se pudo conectar con la base de datos. Verifica el enlace de publicación.")
+    st.error("No se pudo conectar con la base de datos.")
