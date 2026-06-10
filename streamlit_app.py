@@ -6,6 +6,7 @@ import requests
 from io import BytesIO
 from datetime import datetime
 import numpy as np
+import time
 
 # =========================================================================
 # --- CONFIGURACIÓN DE NIVEL BI DIRECTOR ---
@@ -58,7 +59,8 @@ def load_all_intelligence_data():
     meses_dict = {1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril', 5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto', 9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'}
 
     try:
-        resp_x = requests.get(URL_XLSX, timeout=60)
+        # Aumentamos el timeout a 180 segundos para archivos pesados
+        resp_x = requests.get(URL_XLSX, timeout=180)
         resp_x.raise_for_status()
         xls = pd.ExcelFile(BytesIO(resp_x.content), engine='openpyxl')
 
@@ -96,10 +98,10 @@ def load_all_intelligence_data():
                 
                 melted_data = []
                 for i in range(25, len(cabeceras), 3):
+                    if i+2 >= len(cabeceras): break
                     fecha_val = fechas_raw[i]
                     if pd.isna(fecha_val): continue
                     
-                    # Convertir fecha_val a datetime de forma segura
                     try:
                         fecha_dt = pd.to_datetime(fecha_val)
                         if pd.isna(fecha_dt): continue
@@ -115,7 +117,6 @@ def load_all_intelligence_data():
                     df_models['Ventas_Pzas'] = to_number(df_models['Ventas_Pzas'])
                     df_models['Dev_Pzas'] = to_number(df_models['Dev_Pzas'])
                     df_models['Venta_Neta_$'] = to_number(df_models['Venta_Neta_$'])
-                    # Cálculo de semana seguro
                     df_models['Semana_Num'] = df_models['Fecha'].dt.isocalendar().week
                     df_models['Semana'] = df_models['Semana_Num'].apply(lambda x: f"Sem {x}")
 
@@ -126,7 +127,7 @@ def load_all_intelligence_data():
             df_op['Fecha'] = pd.to_datetime(df_op['Fecha'], errors='coerce')
             df_op['Mes'] = df_op['Fecha'].dt.month.map(meses_dict)
 
-        resp_c = requests.get(URL_CSV, timeout=30)
+        resp_c = requests.get(URL_CSV, timeout=60)
         resp_c.raise_for_status()
         df_m = pd.read_csv(BytesIO(resp_c.content), encoding='latin1', low_memory=False)
         df_m.columns = [str(c).strip() for c in df_m.columns]
