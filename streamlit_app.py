@@ -99,7 +99,6 @@ def load_all_intelligence_data():
         model_frames = []
 
         for sheet in xls.sheet_names:
-            # Detección de datos operativos (WoW)
             if 'sem' in sheet.lower():
                 raw = pd.read_excel(xls, sheet_name=sheet, header=None, engine='openpyxl')
                 h_rows = raw[raw[1] == 'Tienda'].index.tolist()
@@ -115,17 +114,25 @@ def load_all_intelligence_data():
                         })
                         d_idx += 1
 
-            # Detección de datos de modelos (Venta/Devolución)
-            # Mejoramos la detección buscando palabras clave en el nombre de la hoja O en el contenido
+            # Buscamos la pestaña de modelos (venta y devolucion)
             is_model_sheet = any(kw in sheet.lower() for kw in ['venta', 'devolucion', 'devolución'])
             if not is_model_sheet:
-                # Si el nombre no ayuda, revisamos las primeras filas
-                sample = pd.read_excel(xls, sheet_name=sheet, nrows=5, header=None).astype(str).values.flatten()
-                if any('modelo' in str(v).lower() or 'devolucion' in str(v).lower() for v in sample):
-                    is_model_sheet = True
+                # Intento de detección por contenido si el nombre no coincide
+                try:
+                    sample = pd.read_excel(xls, sheet_name=sheet, nrows=10, header=None).astype(str).values.flatten()
+                    if any('modelo' in str(v).lower() or 'devolucion' in str(v).lower() for v in sample):
+                        is_model_sheet = True
+                except: pass
             
             if is_model_sheet:
                 tmp = pd.read_excel(xls, sheet_name=sheet, engine='openpyxl')
+                # Si la primera fila es basura, intentamos encontrar la cabecera real
+                if 'modelo' not in [str(c).lower() for c in tmp.columns]:
+                    for i in range(5):
+                        test = pd.read_excel(xls, sheet_name=sheet, header=i, engine='openpyxl')
+                        if 'modelo' in [str(c).lower() for c in test.columns] or 'devolucion' in [str(c).lower() for c in test.columns]:
+                            tmp = test
+                            break
                 tmp.columns = [str(c).strip() for c in tmp.columns]
                 tmp['Hoja_Origen'] = sheet
                 model_frames.append(tmp)
@@ -157,9 +164,9 @@ def load_all_intelligence_data():
 def add_recovery_columns(df, m_cols):
     df = df.copy()
     d_col, v_col, vn_col = m_cols.get('devolucion'), m_cols.get('venta'), m_cols.get('venta_neta')
-    df['Devolucion_Pzas'] = to_number(df[d_col]) if d_col in df.columns else 0
-    df['Venta_Pzas'] = to_number(df[v_col]) if v_col in df.columns else 0
-    df['Venta_Neta_$'] = to_number(df[vn_col]) if vn_col in df.columns else 0
+    df['Devolucion_Pzas'] = to_number(df[d_col]) if d_col and d_col in df.columns else 0
+    df['Venta_Pzas'] = to_number(df[v_col]) if v_col and v_col in df.columns else 0
+    df['Venta_Neta_$'] = to_number(df[vn_col]) if vn_col and vn_col in df.columns else 0
     return df
 
 
@@ -178,12 +185,19 @@ df_op, df_models, m_cols, df_m = load_all_intelligence_data()
 if not df_op.empty:
     st.sidebar.image("https://priceshoes.com/media/logo/stores/1/logo_price_shoes.png", width=160)
     st.sidebar.markdown("### Filtros")
+    
+    # --- FILTRO POR SEMANA ---
+    all_weeks = sorted(df_op['Semana'].dropna().unique().tolist(), key=lambda x: int(''.join(filter(str.isdigit, str(x))) or 0))
+    sel_semanas = st.sidebar.multiselect("Semanas:", all_weeks, default=all_weeks)
+    
     sel_tiendas = st.sidebar.multiselect("Tiendas:", sorted(df_op['Tienda'].dropna().unique().tolist()), default=df_op['Tienda'].dropna().unique().tolist())
     sel_meses = st.sidebar.multiselect("Meses:", ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'], default=df_op['Mes'].dropna().unique().tolist())
+    
     act_list = sorted([str(x) for x in df_m['Actividad'].dropna().unique()]) if not df_m.empty and 'Actividad' in df_m.columns else []
     sel_act = st.sidebar.multiselect("Actividades:", act_list, default=act_list)
 
-    df_f = df_op[(df_op['Tienda'].isin(sel_tiendas)) & (df_op['Mes'].isin(sel_meses))]
+    # Aplicación de filtros
+    df_f = df_op[(df_op['Tienda'].isin(sel_tiendas)) & (df_op['Mes'].isin(sel_meses)) & (df_op['Semana'].isin(sel_semanas))]
     if not df_m.empty and {'Tienda', 'Mes', 'Actividad'}.issubset(df_m.columns):
         df_m_f = df_m[(df_m['Tienda'].isin(sel_tiendas)) & (df_m['Mes'].isin(sel_meses)) & (df_m['Actividad'].astype(str).isin(sel_act))]
     else: df_m_f = pd.DataFrame()
@@ -193,8 +207,7 @@ if not df_op.empty:
 
     # --- COMPARATIVOS WoW ---
     st.markdown("### Comparativo Semanal (Últimas 4 Semanas)")
-    all_w = sorted(df_op['Semana'].dropna().unique().tolist(), key=lambda x: int(''.join(filter(str.isdigit, str(x))) or 0))
-    w_show = all_w[-4:]
+    w_show = all_weeks[-4:]
     cols_w = st.columns(4)
     for i, sem in enumerate(w_show):
         df_c = df_op[df_op['Semana'] == sem]
@@ -248,13 +261,23 @@ if not df_op.empty:
         st.markdown("### Top 30 Modelos por Tienda")
         if not df_models.empty:
             tienda_col = m_cols.get('tienda')
-            tiendas_modelos = sorted(df_models[tienda_col].dropna().astype(str).unique().tolist()) if tienda_col in df_models.columns else []
-            t_sel = st.selectbox("Tienda para Ranking:", ["Todas"] + tiendas_modelos)
+            sem_col = m_cols.get('semana')
+            
+            # Filtro adicional de semana para modelos si existe la columna
             df_mf = df_models.copy()
+            if sem_col in df_mf.columns:
+                weeks_model = sorted(df_mf[sem_col].dropna().unique().tolist())
+                sel_sem_m = st.multiselect("Filtrar Semanas (Modelos):", weeks_model, default=weeks_model)
+                df_mf = df_mf[df_mf[sem_col].isin(sel_sem_m)]
+
+            tiendas_modelos = sorted(df_mf[tienda_col].dropna().astype(str).unique().tolist()) if tienda_col in df_mf.columns else []
+            t_sel = st.selectbox("Tienda para Ranking:", ["Todas"] + tiendas_modelos)
             if tienda_col in df_mf.columns and t_sel != "Todas": df_mf = df_mf[df_mf[tienda_col].astype(str) == str(t_sel)]
+            
             df_mf = add_recovery_columns(df_mf, m_cols)
             dim_cols = [c for c in [m_cols.get('modelo'), m_cols.get('color'), m_cols.get('merca')] if c and c in df_mf.columns]
             if not dim_cols: dim_cols = [m_cols.get('id')] if m_cols.get('id') in df_mf.columns else []
+            
             if dim_cols:
                 df_top = summarize_recovery(df_mf, dim_cols)
                 t_dev, t_venta, t_rec, t_neta_rec = df_top['Devolucion_Pzas'].sum(), df_top['Venta_Pzas'].sum(), df_top['Pzas_Recuperadas'].sum(), df_top['Venta_Neta_Recuperada_$'].sum()
@@ -265,8 +288,10 @@ if not df_op.empty:
                 k3.metric("Pzas recuperadas", f"{t_rec:,.0f}", delta=f"{safe_div(t_rec, t_dev)*100:.1f}%")
                 k4.metric("Venta neta rec.", f"${t_neta_rec:,.2f}")
                 st.dataframe(df_top.sort_values(['Pzas_Recuperadas', 'Venta_Neta_Recuperada_$'], ascending=False).head(30), use_container_width=True)
-            else: st.warning("No se encontraron columnas de modelo/ID.")
-        else: st.warning("No se detectaron datos de modelos en el archivo.")
+            else: st.warning("No se encontraron columnas de modelo/ID en las pestañas detectadas.")
+        else:
+            st.warning("⚠️ No se detectó la pestaña 'venta y devolucion' en el archivo publicado.")
+            st.info("💡 **Instrucción para solucionar:** En Google Sheets, ve a 'Archivo' > 'Compartir' > 'Publicar en la Web'. Asegúrate de que 'Todo el documento' esté seleccionado o añade específicamente la pestaña 'venta y devolucion' a la publicación.")
 
     with t_conv:
         st.markdown("### Conversión Semanal")
@@ -275,7 +300,7 @@ if not df_op.empty:
             df_c_s = summarize_recovery(df_c, [m_cols['semana']]).sort_values(m_cols['semana'])
             st.plotly_chart(px.line(df_c_s, x=m_cols['semana'], y='% Recuperacion Dev vs Venta', markers=True, title="Tendencia de Conversión"), use_container_width=True)
             st.dataframe(df_c_s, use_container_width=True)
-        else: st.warning("Sin datos de semana para conversión.")
+        else: st.warning("Sin datos de modelos para mostrar conversión semanal.")
 
     with t_audit: st.dataframe(df_f, use_container_width=True)
 else: st.info("Conectando con la base de datos...")
